@@ -1,0 +1,18 @@
+{
+  "name": "claude-docgen",
+  "owner": {
+    "name": "dreamzero-oxm",
+    "url": "https://github.com/dreamzero-oxm"
+  },
+  "description": "Claude Code plugin marketplace: multi-agent code documentation generator (multilingual, default Simplified Chinese)",
+  "plugins": [
+    {
+      "name": "docgen",
+      "source": "./plugins/docgen",
+      "description": "Multi-agent code documentation generator with incremental updates and resume support; configurable output language (default zh-CN)",
+      "version": "0.3.0",
+      "category": "documentation",
+      "keywords": ["docgen", "documentation", "markdown", "subagent", "incremental", "multilingual", "i18n", "chinese", "english", "japanese"]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "docgen",
+  "version": "0.3.0",
+  "description": "Multi-agent code documentation generator with incremental updates and resume support; configurable output language (default zh-CN)",
+  "author": {
+    "name": "dreamzero-oxm",
+    "url": "https://github.com/dreamzero-oxm"
+  },
+  "homepage": "https://github.com/dreamzero-oxm/claude-docgen",
+  "repository": "https://github.com/dreamzero-oxm/claude-docgen",
+  "license": "MIT",
+  "keywords": [
+    "docgen",
+    "documentation",
+    "markdown",
+    "subagent",
+    "incremental",
+    "claude-code",
+    "multilingual",
+    "i18n",
+    "chinese",
+    "english",
+    "japanese"
+  ]
+}
