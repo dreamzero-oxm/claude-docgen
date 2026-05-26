@@ -1,7 +1,7 @@
 ---
 description: Multi-agent code documentation generator (default zh-CN, can target en-US / ja-JP / etc.); incremental updates with resume support
 argument-hint: <path> [--include=GLOB] [--exclude=GLOB] [--concurrency=N] [--lang=CODE] [--force]
-allowed-tools: Read, Glob, Grep, Bash(git rev-parse:*), Bash(git -C *:*), Bash(git diff:*), Bash(git ls-files:*), Bash(test:*), Bash(echo:*), Bash(sed:*), Bash(tr:*), Bash(sha256sum:*), Bash(awk:*), Bash(wc:*), Bash(mkdir:*), Bash(dirname:*), Bash(basename:*), Bash(cat:*), Bash(ls:*), Bash(find:*), Bash(printenv:*), Write, Edit, Task
+allowed-tools: Read, Grep, Bash, Write
 model: claude-sonnet-4-6
 ---
 
