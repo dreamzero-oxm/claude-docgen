@@ -294,6 +294,15 @@ Reused nodes (auth middleware, common repos) get walked/reviewed once instead of
 
 **Concurrency model (§10.3):** start up to `--concurrency` `docgen-flow` Tasks in parallel. **The moment a flow returns `flow_done`, it enters its own review sub-loop immediately**—do not wait for other flows. Generation and review/rewrite share the same `--concurrency` budget. Each flow's state machine advances independently (`in_progress → flow_done → review_passed/unconverged`); write state to disk as each flow reaches a terminal status (resume depends on it).
 
+**G.0 Resume recovery (§四, treat R3) — only in resume mode (Step D detected `run_active`)**: for each flow in the work set, before spawning, inspect disk:
+1. **flow doc absent** (`docs/flows/<slug>.md` missing) → normal path: spawn `docgen-flow` from scratch (G.1).
+2. **flow doc present AND `docs/.docgen-scratch/run/review/<slug>.json` exists** → **skip generation, re-enter the review sub-loop directly** (G.3): seed `review.rounds` from the file's `rounds`; if `last_verdict == "fail"` and `open_issues` non-empty, the next action is a rewrite spawn carrying those `open_issues` verbatim (do NOT regenerate from scratch); if `last_verdict == "pass"`, treat as `review_passed` terminal (back-fill header per K.1) — a pass marker means the last reviewer verdict was PASS.
+3. **flow doc present, no review file** → treat as just `flow_done`: enter G.3 at round 0.
+Log one info line per recovered flow: `info: resume — flow <slug> recovered as <regenerate|review-rounds=N|flow_done>`.
+Outside resume mode (normal run), G.0 is a no-op and every flow goes through G.1.
+
+> Edge: if a reviewer subagent was interrupted mid-verdict, no `review/<slug>.json` was written → falls into case 3 (round 0), at most one extra review round is spent. This is acceptable: review is read-only and the checkpoint is the doc itself, not the reviewer's intermediate reasoning.
+
 **G.1 Spawn `docgen-flow`** (for each flow in the work set, in parallel batches ≤ concurrency, **all in one message per batch**):
 
 ```
@@ -353,7 +362,7 @@ Return PASS, or FAIL with issues (each issue MUST carry file:line evidence).
 ```
 
 - **PASS** → `flows[slug].status = "review_passed"`, `review = { status:"passed", rounds:<r> }`. Back-fill the doc header (Step K.1). Terminal. Write state.
-- **FAIL** → **discard any issue lacking `file:line` evidence** (§10.2). If no valid issues remain → treat as PASS. Otherwise re-spawn `docgen-flow` with the same params **plus** `review_issues:` (the valid issues verbatim) telling it to fix exactly those hops without inventing new edges; on its return go back to G.3 (review again). Increment `review.rounds`.
+- **FAIL** → **discard any issue lacking `file:line` evidence** (§10.2). If no valid issues remain → treat as PASS. Otherwise re-spawn `docgen-flow` with the same params **plus** `review_issues:` (the valid issues verbatim) telling it to fix exactly those hops without inventing new edges; on its return go back to G.3 (review again). Increment `review.rounds`（**resume note**: if this flow was recovered via G.0 case 2, `review.rounds` starts from the persisted value, not 0 — so the oscillation guard and `--max-review-rounds` count across the interruption, not from scratch）。
 - **Convergence guard (§10.6)**: rounds are uncapped by default, BUT if two consecutive review rounds return **substantially the same `issues`** (nothing fixed) → stop: oscillation. Also stop if `--max-review-rounds=N` is hit. Either way → `status = "review_unconverged"`, `review.status = "failed_unconverged"`, keep the last doc, write the unconverged banner (Step K.2). Terminal.
 
 **Per-flow self-check** (immediately after each dispatch): Did I *actually* invoke `Task`, or just plan to? How many did I send this batch (== batch size)? Is each return one of the protocol words?
