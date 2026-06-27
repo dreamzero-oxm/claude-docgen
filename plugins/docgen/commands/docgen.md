@@ -319,6 +319,8 @@ Outside resume mode (normal run), G.0 is a no-op and every flow goes through G.1
 
 **G.1 Spawn `docgen-flow`** (for each flow in the work set, in parallel batches ≤ concurrency, **all in one message per batch**):
 
+**Directed-update exit valve (§五.3)**: before deciding to pass `previous_doc_path`/`changed_scope`, compute the fraction of the flow's `walked_symbols` that intersect `changed_scope.symbols`. If it **exceeds 50%** (or symbols unavailable so it can't be bounded), **drop directed mode** and regenerate from scratch (omit both params) — directed update is only worthwhile when the change is localized. Log `info: flow <slug> changed scope >50%, full regenerate`.
+
 ```
 Task(
   subagent_type: "docgen-flow",
@@ -340,6 +342,11 @@ entry:
   signature: <e.g. "POST /api/v1/login">
   file: <entry source file, relative to project_root>
   symbol: <entry function/method name>
+# —— 定向更新（§五.2）：仅当本流程是「增量判定为脏、要重跑」时带以下两项；首次生成不带 ——
+previous_doc_path: docs/flows/<slug>.md     # 上一版文档（作基线读，未受影响段落尽量保留）
+changed_scope:                              # 本次具体变更
+  files: [<changed file rel path>, ...]
+  symbols: [<pkg.Symbol@file:line>, ...]    # provider 可用时给；不可用时只给 files
 flow_doc_path: docs/flows/<slug>.md
 flow_doc_path_abs: <project_root>/docs/flows/<slug>.md
 

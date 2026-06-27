@@ -223,6 +223,17 @@ If the prompt carries `review_issues`, this is a rewrite after a failed review r
 3. **Do not** add new fabricated edges to compensate, and do not "defend" a hop the reviewer refuted unless you can re-cite the `file:line` proving the call exists in the caller's body.
 4. Re-emit the full `DONE` payload (the orchestrator re-runs review on the rewrite).
 
+## 定向更新模式（收到 `previous_doc_path` + `changed_scope` 时，§五.2）
+
+当编排器传入 `previous_doc_path` 与 `changed_scope`，说明这是一次增量重跑、变更是局部的：
+
+1. **读上一版文档作基线**：`Read` `previous_doc_path`，把它的章节结构与未受影响的逐跳分析作为起点。
+2. **只重写受影响部分**：仅重新分析 `changed_scope.symbols`（或 `changed_scope.files` 内）涉及的跳与章节；未受影响的段落**尽量逐字保留**，减少 git diff 噪音与 token。
+3. **但仍须回源码抽查保留部分**（关键，守住「不信任、回源码核对」哲学）：对你选择保留的跳，至少快速核对其 `file:行` 仍存在、符号未被改名/删除；发现保留段已过期 → 一并更新，不要盲目沿用旧文。
+4. 不带这两个参数时，按全量 DFS 生成（原行为不变）。
+
+> 失败条件：若上一版文档与当前源码差异过大（保留段大面积对不上），**放弃定向、退回全量重写本流程**，并在返回里说明降级原因。
+
 ## Hard constraints
 
 1. **Only write under `<project_root>/docs/flows/`** (the flow-doc path the caller gave). Never modify source code, `.claude/`, or any other repo content.
