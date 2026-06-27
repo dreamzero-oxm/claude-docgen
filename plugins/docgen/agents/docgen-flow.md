@@ -28,6 +28,10 @@ entry:
   symbol: <entry function / method name, e.g. "Login">
 flow_doc_path: <output path relative to project_root, e.g. docs/flows/post_api_v1_login.md>
 flow_doc_path_abs: <absolute path = project_root + "/" + flow_doc_path>
+mode: business | shared        # default business. shared = this entry IS a shared hotspot node; walk only its own subchain.
+shared_nodes:                  # OPTIONAL — hotspots already documented; stop descending at these (link instead)
+  - symbol: <pkg.Symbol>
+    doc_path: docs/flows/_shared/<slug>.md
 review_issues:                         # OPTIONAL — present only on a review-driven rewrite (see §6.1)
   - hop: <which hop / symbol>
     problem: "<reviewer's complaint, with file:line evidence>"
@@ -39,6 +43,8 @@ review_issues:                         # OPTIONAL — present only on a review-d
 - **`max_depth` fallback**: if missing, default to `6`.
 - **`mermaid` fallback**: if missing, default to `true`.
 - **`callgraph` fallback**: if missing, default to `true`. When `false`, skip the provider entirely and use grep heuristics for every hop.
+- **`mode` fallback**: missing → `business`. When `shared`, the entry itself is a reused hotspot: walk only the subchain rooted at it, and in §1 TL;DR state "本节点被多条流程复用（公共节点）".
+- **`shared_nodes`**: when the DFS reaches a symbol listed here, emit ONE hop `[公共节点 → 见 <doc_path>]` and STOP descending into it (it is documented separately). This is how flow docs avoid re-walking shared middleware.
 - **`review_issues` present** = this is a rewrite. Read §6.1 first: you must go back to the source and fix exactly those hops; do NOT invent new edges to "round out" the doc.
 
 ## Workflow (DFS call-chain analysis)
@@ -77,6 +83,8 @@ Starting from the entry's implementation body, identify **which downstream funct
 - Maintain a `visited` set of symbols, normalized to a key `<package>.<symbol>`.
 - When you reach a symbol already in `visited` → **do not re-expand it**. At that hop, annotate `↩ see above (recursion/cycle)` and point back to where it was first expanded.
 - `max_depth` is only the last-resort backstop against runaway depth; it is NOT the cycle cure.
+
+**Shared-node short-circuit**: before descending into a callee, check `shared_nodes`. If the callee's normalized `pkg.Symbol` is listed, render the hop as `[公共节点 → 见 <doc_path>]` (a clickable link) and DO NOT descend—the shared doc covers it. This is not a break (no ⚠️); it is an intentional, honest hand-off.
 
 **Broken-chain handling (this is where DFS legitimately stops)** — static tracing via `grep`/`Read` will inevitably break at: interface → implementation (dependency injection), callbacks/observers, event buses, reflection, trpc/message dispatch, framework-convention entry points. **When you cannot follow the next hop, do NOT guess and do NOT silently stop.** The rule (borrowed from call-graph tooling: *a wrong edge poisons the whole graph—prefer silence to a mislabeled edge*):
 - Mark the break explicitly in the doc: `⚠️ chain stops here ｜ form = interface call / callback / reflection / trpc dispatch ｜ at file:line`.
