@@ -29,6 +29,8 @@ entry:
 flow_doc_path: <output path relative to project_root, e.g. docs/flows/post_api_v1_login.md>
 flow_doc_path_abs: <absolute path = project_root + "/" + flow_doc_path>
 mode: business | shared        # default business. shared = this entry IS a shared hotspot node; walk only its own subchain.
+domain_primer: |               # OPTIONAL — distilled domain knowledge from --refs (Step E.2). Use to get business naming/terms right.
+  <primer text, may be absent>
 shared_nodes:                  # OPTIONAL — hotspots already documented; stop descending at these (link instead)
   - symbol: <pkg.Symbol>
     doc_path: docs/flows/_shared/<slug>.md
@@ -45,6 +47,7 @@ review_issues:                         # OPTIONAL — present only on a review-d
 - **`callgraph` fallback**: if missing, default to `true`. When `false`, skip the provider entirely and use grep heuristics for every hop.
 - **`mode` fallback**: missing → `business`. When `shared`, the entry itself is a reused hotspot: walk only the subchain rooted at it, and in §1 TL;DR state "本节点被多条流程复用（公共节点）".
 - **`shared_nodes`**: when the DFS reaches a symbol listed here, emit ONE hop `[公共节点 → 见 <doc_path>]` and STOP descending into it (it is documented separately). This is how flow docs avoid re-walking shared middleware.
+- **`domain_primer` present**: distilled domain knowledge from user-provided refs. Use it to get **business naming/terminology right** (correct abbreviations, internal names, concept explanations). It does **NOT** change call-chain facts: you still confirm every edge against the source. Primer is for *how to name/explain*, never for *what calls what*. If the primer conflicts with the code, the code wins for facts; note the term discrepancy honestly.
 - **`review_issues` present** = this is a rewrite. Read §6.1 first: you must go back to the source and fix exactly those hops; do NOT invent new edges to "round out" the doc.
 
 ## Workflow (DFS call-chain analysis)

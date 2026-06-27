@@ -17,6 +17,8 @@ The risk you exist to catch: an LLM walking a call chain may **fabricate edges**
 project_root: /abs/path/to/repo
 flow_doc_path_abs: <absolute path to the flow doc to verify>
 callgraph: true | false         # whether the call-graph provider was enabled; missing → assume true
+domain_primer: |                # OPTIONAL — distilled domain knowledge from --refs. Use ONLY to sanity-check business naming, NOT to relax fact-checking.
+  <primer text, may be absent>
 touched_files:                  # the files the flow claims to have walked
   - <rel path 1>
   - <rel path 2>
@@ -39,6 +41,8 @@ Re-read the source yourself (do **not** trust the flow doc's conclusions). Verif
 5. **Provenance matches the provider** — a hop tagged `[直接调用]` or `[provider:接口→实现]` must correspond to a real edge the provider reports (when the provider is available). A `[推断:grep]` tag is acceptable when **`callgraph` is disabled (`callgraph:false`) OR the provider was genuinely unavailable for that hop**; it is NOT acceptable as a substitute for a provider-confirmed edge when the provider was available and working.
 
 **What you do NOT check** (these are quality dimensions, deliberately out of scope this round to avoid oscillating rewrites): readability, structural completeness, whether some node was *omitted*. You only judge whether what *is* written is *true*. A doc that is terse but accurate PASSES.
+
+**On `domain_primer`** (if provided): it is distilled domain knowledge from user refs. You may use it only to sanity-check that the doc uses the right business naming/terms. It is **NOT** a fact source for call edges and **never relaxes** your standard — a hop without source evidence still FAILs even if the primer's terminology was used correctly. Do not FAIL a hop merely for naming style.
 
 ## Verdict rules
 
