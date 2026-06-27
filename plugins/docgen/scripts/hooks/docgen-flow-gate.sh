@@ -30,6 +30,65 @@ PROJECT_ROOT="$(docgen_project_root || true)"
 AGENT_ID="$(docgen_json '.agent_id' 'agent_id')"
 RUN_DIR="$(docgen_active_run_dir || true)"
 
+SUBAGENT_TYPE="$(docgen_json '.subagent_type' 'subagent_type')"
+
+# —— 分流（设计 §四）：reviewer 复用本脚本，但只记 review 进度、绝不 block、不做机械校验 ——
+if [ "$SUBAGENT_TYPE" = "docgen-flow-review" ]; then
+  review_dir="$(docgen_review_dir 2>/dev/null)" || { echo "info: flow-gate(review) 无活动 run，跳过" >&2; exit 0; }
+  mkdir -p "$review_dir" 2>/dev/null || { echo "info: flow-gate(review) 无法创建 $review_dir" >&2; exit 0; }
+  # 待校验流程文档路径：优先输入顶层 flow_doc_path，否则从输入里 grep
+  rflow="$(docgen_json '.flow_doc_path' 'flow_doc_path')"
+  [ -z "$rflow" ] && rflow="$(printf '%s' "$DOCGEN_HOOK_INPUT" | grep -oE '[^"]*docs/flows/[^"]*\.md' | tail -n1)"
+  rslug="$(docgen_slug_from_flow_path "$rflow" 2>/dev/null)" || { echo "info: flow-gate(review) 无法提取 slug from $rflow" >&2; exit 0; }
+  rfile="$review_dir/$rslug.json"
+  # reviewer 裁决文本：从 output / 最后助手消息透传字段里取
+  verdict_text="$(docgen_json '.output' 'output')"
+  [ -z "$verdict_text" ] && verdict_text="$(docgen_json '.last_assistant_message' 'last_assistant_message')"
+  if printf '%s' "$verdict_text" | grep -qE '(^|[^A-Za-z])PASS([^A-Za-z]|$)'; then
+    last_verdict="pass"
+  else
+    last_verdict="fail"
+  fi
+  # 轮次：已有文件则 +1，否则 1
+  prev_rounds=0
+  [ -f "$rfile" ] && prev_rounds="$(grep -oE '"rounds":[[:space:]]*[0-9]+' "$rfile" | grep -oE '[0-9]+' | head -n1)"
+  [ -z "$prev_rounds" ] && prev_rounds=0
+  rounds=$((prev_rounds + 1))
+  # 未解 issue：FAIL 时把 issues 原文行收进数组（PASS 则空）。
+  # verdict_text 可能带字面 \n（无 jq 时 docgen_json 走 sed，不解转义），先统一解码成真实换行。
+  decoded="$(printf '%s' "$verdict_text" | sed 's/\\n/\n/g')"
+  if command -v jq >/dev/null 2>&1; then
+    if [ "$last_verdict" = "fail" ]; then
+      issues_json="$(printf '%s' "$decoded" | sed -n 's/^[[:space:]]*-[[:space:]]*//p' | jq -R . | jq -s .)"
+    else
+      issues_json="[]"
+    fi
+    jq -n --argjson r "$rounds" --arg v "$last_verdict" --argjson i "$issues_json" \
+      '{rounds:$r, last_verdict:$v, open_issues:$i}' > "$rfile" 2>/dev/null \
+      || echo "info: flow-gate(review) 写 $rfile 失败" >&2
+  else
+    # 无 jq 降级：手工拼 JSON。仍保留 open_issues（Task6 续跑重写依赖），
+    # 逐行抽 issue、转义双引号与反斜杠后拼成数组。
+    issues_arr="[]"
+    if [ "$last_verdict" = "fail" ]; then
+      issues_arr="["
+      first=1
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        esc="$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        if [ "$first" = 1 ]; then issues_arr="${issues_arr}\"${esc}\""; first=0
+        else issues_arr="${issues_arr},\"${esc}\""; fi
+      done <<EOF
+$(printf '%s' "$decoded" | sed -n 's/^[[:space:]]*-[[:space:]]*//p')
+EOF
+      issues_arr="${issues_arr}]"
+    fi
+    printf '{"rounds": %s, "last_verdict": "%s", "open_issues": %s}\n' "$rounds" "$last_verdict" "$issues_arr" > "$rfile" 2>/dev/null \
+      || echo "info: flow-gate(review) 写 $rfile 失败（无 jq）" >&2
+  fi
+  exit 0
+fi
+
 MAX_RETRY="${DOCGEN_FLOW_GATE_MAX_RETRY:-3}"
 REF_LIMIT="${DOCGEN_FLOW_GATE_REF_LIMIT:-200}"
 

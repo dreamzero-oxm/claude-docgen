@@ -34,6 +34,12 @@
         "hooks": [
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/docgen-flow-gate.sh" }
         ]
+      },
+      {
+        "matcher": "docgen-flow-review",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/docgen-flow-gate.sh" }
+        ]
       }
     ]
   }
