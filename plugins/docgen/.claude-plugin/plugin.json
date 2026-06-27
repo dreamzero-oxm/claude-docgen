@@ -1,7 +1,7 @@
 {
   "name": "docgen",
-  "version": "0.3.0",
-  "description": "Multi-agent code documentation generator with incremental updates and resume support; configurable output language (default zh-CN)",
+  "version": "0.4.0",
+  "description": "Flow-centric multi-agent code documentation generator: DFS call-chain flow docs with adversarial review, per-directory CLAUDE.md context guides, progressive-disclosure glossary; incremental + resume; configurable output language (default zh-CN)",
   "author": {
     "name": "dreamzero-oxm",
     "url": "https://github.com/dreamzero-oxm"
@@ -9,6 +9,7 @@
   "homepage": "https://github.com/dreamzero-oxm/claude-docgen",
   "repository": "https://github.com/dreamzero-oxm/claude-docgen",
   "license": "MIT",
+  "hooks": "./hooks/hooks.json",
   "keywords": [
     "docgen",
     "documentation",
@@ -16,6 +17,8 @@
     "subagent",
     "incremental",
     "claude-code",
+    "call-graph",
+    "flow",
     "multilingual",
     "i18n",
     "chinese",

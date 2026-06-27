@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": "docgen-flow",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/docgen-subagent-start.sh" }
+        ]
+      },
+      {
+        "matcher": "docgen-dir",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/docgen-subagent-start.sh" }
+        ]
+      },
+      {
+        "matcher": "docgen-flow-review",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/docgen-subagent-start.sh" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/docgen-pretooluse-guard.sh" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "docgen-flow",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/docgen-flow-gate.sh" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,571 +1,499 @@
 ---
-description: Multi-agent code documentation generator (default zh-CN, can target en-US / ja-JP / etc.); incremental updates with resume support
-argument-hint: <path> [--include=GLOB] [--exclude=GLOB] [--concurrency=N] [--lang=CODE] [--force]
-allowed-tools: Read, Grep, Bash, Write
+description: Flow-centric code documentation generator—discovers entry points, walks each call chain depth-first into an end-to-end flow doc, adversarially reviews it, writes per-directory CLAUDE.md context guides and a progressive-disclosure glossary; incremental + resume. Default zh-CN; --lang targets en-US / ja-JP / etc.
+argument-hint: <path> [--entry=GLOB|SYMBOL] [--max-depth=N] [--include=GLOB] [--exclude=GLOB] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--force]
+allowed-tools: Read, Grep, Bash, Write, Edit
 model: claude-sonnet-4-6
 ---
 
-# /docgen —— bulk code documentation via slash-command self-orchestration
+# /docgen —— flow-centric code documentation via slash-command self-orchestration
 
 ## Architectural premise (read this first)
 
-**You (the conversation running `/docgen`) ARE the orchestrator.** A slash command runs in the **main conversation thread**, so you can call the `Task` (a.k.a. `Agent`) tool to spawn one layer of subagents. The flow:
+**You (the conversation running `/docgen`) ARE the orchestrator.** A slash command runs in the **main conversation thread**, so you can call the `Task` (a.k.a. `Agent`) tool to spawn one layer of subagents. **Subagents cannot spawn other subagents** (hard Claude Code limit, per `https://code.claude.com/docs/en/sub-agents`)—so all orchestration, including the review loop, stays here in the main thread.
 
 ```
-user → /docgen (you, main thread) ──Task──► N × docgen-file (leaf subagents, in parallel)
-                                  ──Task──► 1 × docgen-dir  (leaf subagent)
-                                  ── you write top-level docs/README.md yourself
+user → /docgen (you, main thread)
+        │  parse args / locate project_root / resolve lang
+        │  discover entry points (heuristic + --entry override)
+        │  maintain <root>/docs/.docgen-state.json (v3)
+        │  per-flow pipeline: generate → review → rewrite (independent, parallel)
+        │  back-fill flow-doc header review status / banners
+        │  merge docs/glossary/ (L0 index + L1 terms)
+        │  write top-level docs/README.md
+        ├──Task──► docgen-flow        × N   (one per entry; DFS along the call chain)
+        ├──Task──► docgen-flow-review × ≥N  (independent adversarial source check)
+        └──Task──► docgen-dir         × M   (one per directory; writes CLAUDE.md context guide)
 ```
 
-**MUST NOT** delegate orchestration to any subagent. This is a hard Claude Code architectural limit (per the official docs at `https://code.claude.com/docs/en/sub-agents`):
+The old per-file model (`docgen-file`) is gone. The organizing unit is now the **flow**: an entry point plus everything it calls. A lightweight **coverage ledger** still tracks every candidate file so nothing is silently dropped.
 
-> "Subagents cannot spawn other subagents."
-
-A subagent cannot in turn spawn its own subagents. So orchestration must stay at the slash-command layer (main thread, not a subagent), which directly issues `Task` calls for `docgen-file` / `docgen-dir`.
+Deterministic shell hooks (zero token; registered in `hooks/hooks.json`) wrap the subagents: SubagentStart injects shared constraints, PreToolUse denies out-of-bounds writes, SubagentStop mechanically validates each flow doc before it returns. They are an optimization, not a correctness dependency—your orchestration must be correct even if hooks are disabled.
 
 ## Your hard responsibilities (do not cross the line)
 
 | You **MUST** do | You **MUST NOT** do |
 |-----------------|---------------------|
-| Parse args, locate `project_root` | Read full source code from the analyzed directory |
-| Scan candidates, compute sha256, decide incremental work | Write per-file `.md` docs yourself |
-| Slice work units / batch them / serialize across directories | Write any directory's `README.md` MOC yourself |
-| Actually invoke `Task` for `docgen-file` / `docgen-dir` | Hand orchestration off to any subagent |
-| Maintain `<project_root>/docs/.docgen-state.json` | `git commit` / `git add` / modify `.claude/` config |
-| Write the top-level `<project_root>/docs/README.md` | Write any other `.md` (other than the two above) |
-
-## Self-check table (must hold before you return DONE; otherwise fail loudly)
-
-| Metric | Expected | Meaning |
-|--------|----------|---------|
-| Number of `Task(subagent_type=docgen-file)` calls you **actually** made this run | ≥ number of work units derived from `work_set` | Each work unit gets at least one Task |
-| Number of `Task(subagent_type=docgen-dir)` calls you **actually** made this run | == number of directories processed | One MOC per directory |
-| Paths you wrote with `Write` directly | Exactly one: `<project_root>/docs/README.md` | No `.md` writes other than the top index |
-| Times you `Edit`-ed `state.json` | ≥ (directories processed) + (one per file batch) | Continuous write-back throughout the run |
-
-> ⚠️ **If at the end `Task(docgen-file) == 0` while `work_set > 0`**—you **never actually spawned**; you treated "I should spawn" as a thought and moved on. **Report failure to the user**; do not return success and do not paper over it by writing the MOC yourself.
+| Parse args, locate `project_root`, resolve `lang` | Read full source to write flow docs yourself |
+| Discover entry points (heuristic + `--entry`) | Write any `docs/flows/*.md` yourself |
+| Maintain the v3 state file + coverage ledger | Write any directory's `CLAUDE.md` yourself |
+| Run each flow's generate→review→rewrite pipeline by **actually** calling `Task` | Edit content **outside** a CLAUDE.md `docgen:auto` block |
+| Back-fill flow-doc header review status + banners (§ Step K) | Hand orchestration to any subagent |
+| Merge glossary candidates into `docs/glossary/` | `git commit` / `git add` / modify `.claude/` |
+| Write `docs/README.md` + glossary L0 + state file | — |
 
 ## Output directory hard constraint
 
-All generated docs **must** be written under `<project_root>/docs/` (the `docs` folder—**plural**—at the **project root**, NOT under cwd, NOT under the analyzed code directory, NOT the singular `doc/`).
-
-Example: with `project_root=/repo/myapp` and analyzed path `internal/workers`, the doc path must be `/repo/myapp/docs/internal/workers/worker_base.go.md`—**not** `/repo/myapp/internal/workers/docs/...`, **not** `<cwd>/docs/...`. The mirrored source path always starts from `project_root`.
+Everything goes under `<project_root>/docs/` (**plural**, at the **project root**): flow docs in `docs/flows/`, glossary in `docs/glossary/`, the state file at `docs/.docgen-state.json`, the top index at `docs/README.md`. Directory `CLAUDE.md` files are the one exception—they are written **next to the source directory they describe** (e.g. `internal/workers/CLAUDE.md`), because Claude Code auto-loads them from there.
 
 ---
 
-## Workflow (execute step by step; do not skip steps)
+## Workflow (execute step by step; do not skip)
 
 ### Step A: Parse `$ARGUMENTS`
 
-`$ARGUMENTS` looks like:
-
 ```
 internal/workers --concurrency=4
-pkg/auth --include='*.go' --exclude='**/vendor/**'
-src --lang=en-US                                     # output in English
-src --lang=英文                                      # alias works too
-.                                                    # the whole repo
+pkg/auth --entry='POST /api/v1/login'        # override auto-discovery
+src --lang=en-US --max-depth=8
+.                                            # whole repo
 ```
 
 Rules:
-- The first non-`--`-prefixed token is `path` (required)
-- `--include=` / `--exclude=` may repeat and accumulate
-- `--concurrency=N` defaults to 8
-- `--lang=<CODE>` optional; values and default resolution see Step A.1
-- `--force` is a boolean flag (presence = true)
-- `include` defaults to `["*.go"]`, `exclude` defaults to `["*_test.go", "**/vendor/**", "**/.git/**"]`
+- First non-`--` token is `path` (required).
+- `--entry=<glob or symbol or "METHOD /route">` may repeat; **its presence disables auto-discovery** (you document only the user's entries; see Step E.1 and §13.7 TODO-G).
+- `--max-depth=N` DFS depth cap, **default 6**.
+- `--profile=<name>` selects a specific entry-discovery profile from `entry-profiles/` (default: auto-select every profile whose `file_glob` matches; falls back to `generic`).
+- `--include=` / `--exclude=` repeat & accumulate. `include` defaults to `["*.go"]`; `exclude` defaults to `["*_test.go", "**/vendor/**", "**/.git/**"]`.
+- `--concurrency=N` default 8.
+- `--lang=<CODE>` optional (Step A.1).
+- `--no-glossary` boolean: skip glossary extraction/merge.
+- `--no-review` boolean: skip the adversarial review loop (default: review **on**).
+- `--max-review-rounds=N`: hard cap on rewrite rounds per flow (**default: unlimited**, guarded by the oscillation check in Step G.3).
+- `--no-mermaid` boolean: tell `docgen-flow` to omit the Mermaid diagram (default: **on**).
+- `--force` boolean: ignore all incremental logic; regenerate everything.
 
-If `path` is empty, fail loudly to the user:
-
+If `path` is empty, fail loudly:
 ```
-❌ Missing <path> argument. Usage: /docgen <path> [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--force]
+❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--force]
 ```
 
 ### Step A.1: Resolve output language (`lang`)
 
-Pick a `raw_lang` by priority (first hit wins):
+`raw_lang` by priority (first hit wins): `--lang=` → `$DOCGEN_LANG` (`printenv DOCGEN_LANG`) → `state.config.lang` (if state exists) → default `zh-CN`. Then normalize:
 
-```
-1. CLI arg --lang=<value>
-2. Env var $DOCGEN_LANG       # printenv DOCGEN_LANG; empty string = unset
-3. state.json.config.lang     # only if a state file exists; legacy v1 state has no such field, skip
-4. Built-in default "zh-CN"
-```
-
-Then normalize `raw_lang` (lowercase, trim whitespace, look up the table below):
-
-| Input (any of these, case-insensitive) | Normalized to |
-|----------------------------------------|---------------|
+| Input (case-insensitive) | → |
+|---|---|
 | `zh` / `中文` / `简体中文` / `chinese` / `cn` / `zh-cn` | `zh-CN` |
-| `zh-tw` / `繁体` / `繁體中文` / `traditional` / `traditional-chinese` | `zh-TW` |
+| `zh-tw` / `繁体` / `繁體中文` / `traditional` | `zh-TW` |
 | `en` / `english` / `英文` / `英语` / `en-us` | `en-US` |
 | `ja` / `jp` / `日文` / `日本語` / `japanese` / `ja-jp` | `ja-JP` |
 | `ko` / `韩文` / `한국어` / `korean` / `ko-kr` | `ko-KR` |
-| `fr` / `français` / `法文` / `french` | `fr-FR` |
-| `de` / `deutsch` / `德文` / `german` | `de-DE` |
-| **anything else** | passed through verbatim; the model interprets it (e.g. `pt-BR`, `Spanish`, `русский`) |
+| `fr` / `法文` / `french` | `fr-FR` |
+| `de` / `德文` / `german` | `de-DE` |
+| **anything else** | passed through verbatim (model interprets it) |
 
-Result: `lang` (normalized). **Use this single value for the entire run**; every spawned `docgen-file` / `docgen-dir` receives the same `lang`.
+Use this single `lang` for the whole run; every subagent gets it.
 
-> ⚠️ The orchestration layer (your status reports and error messages to the user) is **fixed in English** and does NOT follow `--lang`. `lang` only affects **generated documentation content**.
+> ⚠️ Your status/error output to the user is **fixed in English**; `lang` only affects generated documentation content.
 
 ### Step B: Locate `project_root`
 
-By priority:
+```bash
+test -n "$DOCGEN_PROJECT_ROOT" && echo "$DOCGEN_PROJECT_ROOT"   # 1. env var
+git rev-parse --show-toplevel                                   # 2. git root
+```
+Both fail → `❌ Cannot locate project root. Run inside a git repo, or set $DOCGEN_PROJECT_ROOT.`
+
+### Step C: Expand `path`
+
+```
+target_abs = path if absolute else <project_root>/path
+test -e <target_abs> || fail and exit
+```
+
+### Step C.1: Create the per-run scratch directory (§15.5)
+
+The three hooks share a per-run scratch directory for identity markers and retry counts. **Lifecycle is yours:**
 
 ```bash
-# 1. Environment variable
-test -n "$DOCGEN_PROJECT_ROOT" && echo "$DOCGEN_PROJECT_ROOT"
+# 1. On EVERY run start, first wipe ALL stale scratch dirs (backstops leaks from a
+#    previous run that died before cleanup—do NOT rely only on end-of-run cleanup):
+rm -rf "<project_root>/docs/.docgen-scratch"
 
-# 2. Walk up to find .git
-git rev-parse --show-toplevel
+# 2. Create this run's dir. No timestamp source is needed—the scratch root was just
+#    emptied, so a single fixed subdir name is unique within it:
+mkdir -p "<project_root>/docs/.docgen-scratch/run/agents" "<project_root>/docs/.docgen-scratch/run/gate"
 ```
 
-If both fail, fail loudly:
+- The hooks detect "in a docgen run" by the **existence of a subdirectory** under `docs/.docgen-scratch/`. Creating it here is what arms the PreToolUse guard; wiping it at the end (Step L) is what disarms it.
+- Ensure `docs/.docgen-scratch/` is git-ignored (it holds volatile state). If a `.gitignore` exists at the project root and doesn't already ignore it, you may append a line; otherwise note it in the final report.
+- **Retry counts are not durable resume state**: a resumed run starts fresh scratch, so SubagentStop retry counters reset to 0—consistent with "a flow is an atomic unit, no mid-flight checkpoint" (§13.1).
 
-```
-❌ Cannot locate project root. Run /docgen inside a git repository, or set $DOCGEN_PROJECT_ROOT.
-```
-
-### Step C: Expand `path` to an absolute path
-
-```
-if path is absolute: target_abs = path
-else:                target_abs = <project_root>/path
-
-if not test -e <target_abs>: fail and exit
-```
-
-### Step D: Read / initialize state
+### Step D: Read / initialize state (v3)
 
 ```bash
-test -f <project_root>/docs/.docgen-state.json && echo "EXISTS" || echo "FIRST_RUN"
+test -f <project_root>/docs/.docgen-state.json && echo EXISTS || echo FIRST_RUN
 ```
 
-**state schema (v2, includes `lang` field)**:
+**v3 schema (authoritative)**:
 
 ```json
 {
-  "version": 2,
-  "files": {
-    "<source-relative-path>": {
-      "sha256": "...",
+  "version": 3,
+  "last_run": "<ISO>",
+  "last_run_sha": "<git rev-parse HEAD at last run>",
+  "config": { "project_root": "...", "include": ["*.go"], "exclude": [],
+              "lang": "zh-CN", "max_depth": 6 },
+  "entries": [
+    { "kind": "http_route|rpc_method|main|exported_iface|cron|consumer",
+      "signature": "...", "file": "...", "symbol": "...", "slug": "<flow-slug>" }
+  ],
+  "flows": {
+    "<flow-slug>": {
+      "entry": { "kind": "...", "signature": "...", "file": "...", "symbol": "..." },
       "lang": "zh-CN",
-      "status": "done | failed_permanent",
+      "status": "pending | in_progress | flow_done | review_passed | review_unconverged | orphaned",
       "attempts": 1,
-      "doc_path": "docs/...",
-      "doc_path_failed": "docs/....FAILED.md",
+      "flow_doc_path": "docs/flows/<slug>.md",
+      "touched_files": { "<rel path>": "<sha256>" },
+      "review": { "status": "passed | failed_unconverged", "rounds": 0, "last_issues": [] },
       "generated_at": "..."
     }
   },
   "directories": {
-    "<directory-relative-path>": {
-      "lang": "zh-CN",
-      "status": "done",
-      "moc_path": "docs/.../README.md",
-      "generated_at": "...",
-      "child_files": 14,
-      "child_subdirs": 2
-    }
+    "<dir>": { "lang": "...", "status": "done", "claude_md_path": ".../CLAUDE.md",
+               "flows_through": ["<slug>"], "uncovered_files": ["..."], "generated_at": "..." }
   },
-  "config": {
-    "project_root": "/abs/...",
-    "include": ["*.go"],
-    "exclude": ["*_test.go", "**/vendor/**", "**/.git/**"],
-    "lang": "zh-CN"
-  },
-  "last_run": "..."
+  "file_to_flows": { "<rel path>": ["<slug>"] },
+  "dir_to_flows":  { "<dir>": ["<slug>"] },
+  "coverage": { "candidates_total": 0, "touched": 0, "uncovered": ["<rel path>"] },
+  "glossary": { "terms_count": 0, "l0_path": "docs/glossary/GLOSSARY.md", "generated_at": "..." }
 }
 ```
 
-**FIRST_RUN**: initialize in memory:
+- **Terminal statuses** (skippable on resume): `review_passed`, `review_unconverged`, `orphaned`. Everything else (`pending` / `in_progress` / `flow_done`) re-runs whole.
+- **FIRST_RUN**: init in memory `{ "version":3, "flows":{}, "directories":{}, "entries":[], "file_to_flows":{}, "dir_to_flows":{}, "coverage":{}, "glossary":{}, "config":{...}, "last_run":null, "last_run_sha":null }`.
+- **EXISTS**: Read & parse. **If `version < 3`** (old v1/v2 per-file state): the architecture changed from per-file to flow-centric—the old `files` map is not convertible. Tell the user: `⚠️ State is v<N> (per-file). The flow-centric architecture needs a rebuild; re-run with --force to regenerate.` Then either proceed as `--force` (if they passed it) or stop. Do **not** try to migrate `files` into `flows`.
+- Parse failure → `❌ state.json unparseable; pass --force or delete <path> and rerun.`
 
-```json
-{ "version": 2, "files": {}, "directories": {}, "config": { "lang": "<this run's lang>", ... }, "last_run": null }
+### Step E: Scan candidate files (the coverage universe)
+
+For `target_abs`, iterate every `include` pattern, Glob `"<target_abs>/**/<pat>"`, merge & dedupe, then drop anything matching any `exclude` pattern (Glob has no exclude—filter in Bash/in-memory). Result: `candidates_all` (relative to `project_root`).
+
+Empty → tell the user "no matching code files under the target" and return. This set is the denominator of the coverage ledger.
+
+### Step E.1: Discover entry points (heuristic + `--entry`)
+
+Entry points are where execution begins. Discover them so each becomes one flow.
+
+**If `--entry` was passed**: use exactly those (resolve each glob/symbol/route to a concrete `file` + `symbol` via grep). **Skip auto-discovery entirely** (§13.7 TODO-G). If an `--entry` can't be resolved, log an info line and skip it.
+
+**Otherwise auto-discover via entry profiles** (rules live in `${CLAUDE_PLUGIN_ROOT}/entry-profiles/*.json`, not hardcoded here):
+
+1. Load every `entry-profiles/*.json`. Each has `{ name, lang, file_glob, entry_patterns:[{kind,grep}], false_positive_filters:[...] }`.
+2. Select applicable profiles: those whose `file_glob` matches files in `candidates_all`. If `--profile=<name>` was passed, use only that profile. If none match, fall back to `generic.json`.
+3. For each selected profile, run each `entry_patterns[].grep` via `grep -nE` over `candidates_all`; each hit is a candidate entry of that `kind`.
+4. **False-positive filtering (mandatory):** drop any hit matching any of the profile's `false_positive_filters` (test files, comment lines, vendor/generated/mock). **Log one info line per filtered hit** so misses are auditable.
+
+Profiles are data: adding a language/framework means adding a JSON file, not editing this command. See `entry-profiles/README.md`.
+
+**Empty entry set is not silent:** if discovery (or `--entry` resolution) yields nothing →
 ```
-
-**EXISTS**: `Read` the file, parse JSON.
-
-> **v1 → v2 auto-migration**: if `state.version` is missing or `< 2`:
-> - set `state.version` to `2`
-> - backfill `"lang": "zh-CN"` on every `state.files[*]` entry that lacks it
-> - backfill `"lang": "zh-CN"` on every `state.directories[*]` entry that lacks it
-> - default `state.config.lang` to `"zh-CN"` (legacy versions could only emit Chinese)
-> - On the first run after upgrade, state migrates automatically—no manual step required
-
-> **On FIRST_RUN, state has no file records**—this is normal. **Every candidate file should be processed**; do not skip.
-
-### Step E: Scan candidate files
-
-For `target_abs`, **iterate the `include` array from Step A** and Glob each pattern; merge & dedupe to `candidates_raw`:
-
+❌ No entry points found. Pass --entry='<METHOD /route>' or --entry='<Symbol>' to specify them explicitly.
 ```
-for pat in include:
-    Glob: "<target_abs>/**/<pat>"          # e.g. pat="*.go" → "<target_abs>/**/*.go"
-merge all results → candidates_raw
-```
+and exit.
 
-> ⚠️ Do not hardcode `*.go`. Users may pass `--include='*.lua'` or `--include='*.py' --include='*.go'`; iterate every pattern in the array.
+**Assign a stable `flow-slug` to each entry** (filename + state key; must be globally unique):
+- HTTP route → `<method>_<path>` (e.g. `post_api_v1_login`); RPC/method → `<pkg>_<struct>_<method>`; main/cron/consumer → `<pkg>_<symbol>`. Normalize illegal filename chars (`/`→`_`, strip leading `/`, lowercase).
+- **Collision fallback**: if two entries normalize to the same slug, append `_2`, `_3`, … and persist the chosen slug in `entries[].slug` so incremental re-runs recompute the *same* slug from the entry fields (no slug drift).
 
-Then filter out anything matching any `exclude` pattern (`*_test.go`, `**/vendor/**`, `**/.git/**`, etc. The Glob tool has no exclude support—use Bash `[[ ... = pattern ]]` or in-memory fnmatch). Result: `candidates_all`.
+### Step F: Decide the work set (which flows to (re)generate)
 
-If `candidates_all` is empty → tell the user "no matching code files under the target directory" and return.
+**FIRST_RUN or `--force`**: every discovered entry → a flow in the work set.
 
-### Step F: Decide `work_set` (files to process)
+**Incremental** (state exists, no `--force`)—follow §13.3:
 
-**FIRST_RUN (state.files empty) or `force=true`**:
-```
-work_set = candidates_all     # process everything
-```
-
-**Incremental (state.files non-empty, force=false)**:
-
-First, get a git-eyes view of changed files to narrow the sha256-compute set:
-
+**F.1 Compute `changed_files`** (basis: last run's commit):
 ```bash
-# Run all three; merge & dedupe → git_changed
-git -C <project_root> diff --name-only HEAD~1 HEAD 2>/dev/null
-git -C <project_root> diff --name-only HEAD       2>/dev/null
-git -C <project_root> ls-files --others --exclude-standard 2>/dev/null
+git -C <root> diff --name-only <last_run_sha> HEAD 2>/dev/null   # commits since last run
+git -C <root> diff --name-only HEAD              2>/dev/null     # uncommitted tracked
+git -C <root> ls-files --others --exclude-standard 2>/dev/null   # untracked
 ```
+Merge & dedupe. If `last_run_sha` is missing/invalid (e.g. rebased) → degrade to full (all flows).
 
-For each `f ∈ candidates_all`, **decide in this order** (first hit wins):
+**F.2 Dirty-flow propagation** via `file_to_flows`: for each `f ∈ changed_files`, every slug in `file_to_flows[f]` is **stale → regenerate whole** (review state voided). Second-confirm with the comment-stripped sha256 (git says changed but content-equivalent → skip). **Deleted-file edge**: before hashing, check existence—if a flow's `touched_files` entry no longer exists on disk, **treat as changed and regenerate that flow**; do not sha256 a missing path. Log info `file X deleted, regenerating flow Y`.
 
-1. `f` not in `state.files` → **work_set** (new file)
-2. `f` in `state.files` but `status != done` → **work_set** (last run didn't finish it)
-3. `f` in `state.files`, `status == done`:
-   - `state.files[f].lang` ≠ this run's `lang` → **work_set** (lang mismatch—doc must regenerate)
-   - **not in `git_changed`** → `skipped` (trust git; **do not** compute sha256)
-   - **in `git_changed`** → compute sha256: matches state → `skipped`; differs → **work_set**
+**F.3 Entry add/remove** (always re-discover unless `--entry` given): compare discovered entries to `state.entries`. **New entry → new flow.** **Vanished entry → orphan handling (Step K.3)**, do not regenerate.
 
-> 99% of files don't need sha256; only files git reports as changed do. A language switch (`zh-CN` ↔ `en-US`) triggers a regeneration sweep, but only for entries whose lang doesn't match this run; entries from other languages remain undisturbed.
+**F.4 Lang mismatch**: any flow whose `state.flows[slug].lang ≠ this run's lang` → regenerate.
 
-**Compute sha256 (with comments/whitespace stripped)**—only for the 3.b sub-branch:
+Flows already in a terminal status and not flagged by F.2–F.4 are **skipped** (trusted).
 
-```bash
-sed -E -e 's|//.*$||' -e ':a;N;$!ba;s|/\*[^*]*\*+([^/*][^*]*\*+)*/||g' <file> \
-  | tr -s '[:space:]' ' ' \
-  | sha256sum | awk '{print $1}'
-```
+**F.5 Refresh the coverage ledger** (even in incremental—or you'll misreport): re-enumerate `candidates_all`, set `coverage.uncovered = candidates_all − ⋃ all flows' touched_files`. New files touched by no flow land in `uncovered` and are listed in the final report.
 
-> **Note**: sha256 is computed on the **source file path** (not `doc_path`). The hash is used both to decide `skipped` for this run and as input to docgen-file (which writes it back to state).
+### Step G: Run each flow as an independent generate→review→rewrite pipeline
 
-### Step G: Dynamic granularity bucketing
+> ★ Hotspot. The blocks below are the **real `Task` parameters you must emit**, not pseudocode. The known failure is treating "I should spawn" as a thought—**actually invoke `Task`.**
 
-For each file in `work_set`:
+**Concurrency model (§10.3):** start up to `--concurrency` `docgen-flow` Tasks in parallel. **The moment a flow returns `flow_done`, it enters its own review sub-loop immediately**—do not wait for other flows. Generation and review/rewrite share the same `--concurrency` budget. Each flow's state machine advances independently (`in_progress → flow_done → review_passed/unconverged`); write state to disk as each flow reaches a terminal status (resume depends on it).
 
-```bash
-wc -l <file>     # line count
-wc -c <file>     # byte count
-```
-
-| Bucket | Predicate |
-|--------|-----------|
-| small | lines < 200 AND bytes < 8192 |
-| mid   | 200 ≤ lines ≤ 800 |
-| large | lines > 800 OR bytes > 40960 |
-
-### Step H: Build processing order (leaf directories first)
-
-Group `work_set` by directory depth and **process the deepest directories first** (a parent's MOC must wait for its children's MOCs to link correctly). Directories at the same depth are siblings.
-
-### Step I: Process one directory (the core loop)
-
-For each directory `D`, do the following:
-
-#### I.1 Slice the directory's `work_set` files into "work units"
-
-- Pack `small` files into `merged_small` units (≤ 5 files each, total ≤ 30KB)
-- Each `mid` file becomes its own unit
-- Each `large` file becomes its own unit (use `model: "opus"` when invoking the Task)
-
-#### I.2 Batch by `concurrency=N`
-
-Each batch ≤ N work units.
-
-#### I.3 ★ Spawn a batch of `docgen-file` IMMEDIATELY (**do not narrate—just invoke `Task`**)
-
-> This is a known failure hotspot. **What follows is NOT pseudocode and NOT illustrative—it's the real `Task` parameters you must emit.** Treat it like a fill-in-the-blank and send it now.
-
-For **every work unit in the current batch**, in **the same message**, in **parallel**, issue one `Task` call:
+**G.1 Spawn `docgen-flow`** (for each flow in the work set, in parallel batches ≤ concurrency, **all in one message per batch**):
 
 ```
 Task(
-  subagent_type: "docgen-file",
-  description: "<short, e.g. 'docgen workers/worker_base.go'>",
+  subagent_type: "docgen-flow",
+  description: "<e.g. 'flow: POST /api/v1/login'>",
   prompt: """
-You are docgen-file. Follow your workflow to generate documentation for the files below.
+You are docgen-flow. Generate the end-to-end flow document for the entry below.
 
-context:
-  project_root: <absolute project_root>
-  lang: <normalized lang from Step A.1, e.g. zh-CN / en-US / ja-JP>
-  batch_kind: "single"              # or "merged_small"
-  files:
-    - path: <source path relative to project_root>
-      size_bucket: <small | mid | large>
-      doc_path: <doc output path relative to project_root, with .md suffix>
-      doc_path_abs: <absolute path = project_root joined with doc_path>
-      sha256: <pre-computed 64-char hex>
+project_root: <absolute>
+lang: <normalized lang>
+max_depth: <N>
+mermaid: <true|false>          # false iff --no-mermaid
+entry:
+  kind: <http_route|rpc_method|main|exported_iface|cron|consumer>
+  signature: <e.g. "POST /api/v1/login">
+  file: <entry source file, relative to project_root>
+  symbol: <entry function/method name>
+flow_doc_path: docs/flows/<slug>.md
+flow_doc_path_abs: <project_root>/docs/flows/<slug>.md
 
-When done, return DONE / PARTIAL / FAILED per protocol.
+Return DONE / PARTIAL / FAILED per your protocol (with touched_files + sha256 + glossary_candidates).
+"""
+)
+```
+Set `model: "opus"` for entries you expect to fan out widely (many touched files). Pass only concrete paths, never globs.
+
+**G.2 On return → update state**:
+- `DONE`/`PARTIAL` (doc written) → `flows[slug] = { ..., status: "flow_done", touched_files: {<from return, with sha256>}, attempts: prev+1, generated_at }`, stash `glossary_candidates`. Proceed to G.3.
+- `FAILED` → `attempts = prev+1`. If `< 2`, requeue. If `== 2`, `status` stays non-terminal but write a `.FAILED.md` placeholder (replace trailing `.md` → `.FAILED.md`, absolute path, content = reason + "delete attempts from state or rerun --force") and stop retrying this flow.
+
+**G.3 Review sub-loop** (skip entirely if `--no-review`; then treat `flow_done` as terminal `review_passed` with `review.status:"passed", rounds:0`):
+
+```
+Task(
+  subagent_type: "docgen-flow-review",
+  description: "<e.g. 'review: post_api_v1_login'>",
+  prompt: """
+You are docgen-flow-review. Independently re-read the source and verify the flow doc's call chain.
+
+project_root: <absolute>
+flow_doc_path_abs: <project_root>/docs/flows/<slug>.md
+touched_files:
+  - <rel path 1>
+  - <rel path 2>
+  ...
+
+Return PASS, or FAIL with issues (each issue MUST carry file:line evidence).
 """
 )
 ```
 
-Key points:
+- **PASS** → `flows[slug].status = "review_passed"`, `review = { status:"passed", rounds:<r> }`. Back-fill the doc header (Step K.1). Terminal. Write state.
+- **FAIL** → **discard any issue lacking `file:line` evidence** (§10.2). If no valid issues remain → treat as PASS. Otherwise re-spawn `docgen-flow` with the same params **plus** `review_issues:` (the valid issues verbatim) telling it to fix exactly those hops without inventing new edges; on its return go back to G.3 (review again). Increment `review.rounds`.
+- **Convergence guard (§10.6)**: rounds are uncapped by default, BUT if two consecutive review rounds return **substantially the same `issues`** (nothing fixed) → stop: oscillation. Also stop if `--max-review-rounds=N` is hit. Either way → `status = "review_unconverged"`, `review.status = "failed_unconverged"`, keep the last doc, write the unconverged banner (Step K.2). Terminal.
 
-- For merged-small units, set `batch_kind: "merged_small"` and list 2–5 files; each entry needs `path / size_bucket / doc_path / doc_path_abs / sha256`
-- For `large` units (`size_bucket: large`), **also** pass `model: "opus"` to Task
-- Every unit in the batch **must be sent in a single message** (so Claude Code parallelizes them); do not send them serially one by one
-- **Do not** put glob patterns (`*.go` etc.) in the prompt—pass only **already-Glob-expanded absolute paths**, to avoid `*` being eaten in cross-process serialization
+**Per-flow self-check** (immediately after each dispatch): Did I *actually* invoke `Task`, or just plan to? How many did I send this batch (== batch size)? Is each return one of the protocol words?
 
-After dispatching, **stay silent until all Tasks return**; do not write prose while waiting.
+### Step H: Build directory processing order
 
-**Per-batch self-check (ask yourself immediately after dispatch)**:
+After all flows reach a terminal status, aggregate the reverse indexes from every flow's `touched_files`:
+- `file_to_flows[f] = [slugs touching f]`
+- `dir_to_flows[dir] = [slugs touching any file in dir]` (dir = each ancestor directory of each touched file, within `target_abs`).
 
-1. Did I **actually** invoke the Task tool, or did I just "plan to" in thought? If you didn't really emit it, **stop now and re-emit**—do not move on
-2. How many Tasks did I send in this batch? Should equal the unit count for this batch
-3. Is each Task's return one of `DONE` / `PARTIAL` / `FAILED`? Anything else counts as `FAILED` for retry purposes
+The set of directories to document = keys of `dir_to_flows` (plus, in incremental mode, only those touched by regenerated/new/orphaned flows—§13.3 Step 4). Process **deepest first** (leaf directories before parents) and **serially** (a parent CLAUDE.md links children; parallel would create dead-link windows).
 
-#### I.4 Parse each Task's return → update state
+### Step I: Write each directory's CLAUDE.md (spawn `docgen-dir`)
 
-- Returned `DONE`: `state.files[path] = { sha256, lang: <this run's lang>, status: "done", attempts: 1, doc_path, generated_at }`
-- Returned `PARTIAL`: handle each file's status individually; entries marked done also get `lang: <this run's lang>` written
-- Returned `FAILED`: record `prev = state.files[path]?.attempts ?? 0`; write `state.files[path].attempts = prev + 1`. If `prev + 1 < 2`, requeue for the next batch's retry. If `prev + 1 == 2`, set `status = "failed_permanent"` and **write a placeholder file**:
-
-  - Path rule: replace the trailing `.md` of `doc_path` with `.FAILED.md` (**replace, do not append**). E.g. `docs/.../worker_x.go.md` → `docs/.../worker_x.go.FAILED.md`
-  - Use `Write`, with the **absolute path** = `<project_root>/<the relative path above>`
-  - Content: failure reason + retry guidance ("delete the entry's `attempts` from state, or re-run with `--force`")
-  - **Also record `doc_path_failed` on `state.files[path]`** so docgen-dir can reference the right filename when listing
-
-**Edit `state.json` immediately at end of every batch.** Do not buffer until end-of-directory.
-
-#### I.5 After every batch in this directory finishes: **actually** invoke `Task` for `docgen-dir`
-
-> Same rule as above: this **is not pseudocode**—it's the real `Task` parameters. Skip this step = no MOC for the directory = broken index.
+For each directory `D` (deepest first), **actually** invoke:
 
 ```
 Task(
   subagent_type: "docgen-dir",
-  description: "<MOC: relative dir path>",
+  description: "<CLAUDE.md: D>",
   prompt: """
-You are docgen-dir. Write the MOC (README.md) for the directory below.
+You are docgen-dir. Write/update the context-guide CLAUDE.md for the directory below.
+ONLY touch content inside the <!-- BEGIN/END docgen:auto --> markers; never overwrite human content.
 
-context:
-  project_root: <absolute>
-  lang: <normalized lang from Step A.1>
-  dir_path: <code dir path relative to project_root>
-  moc_path: <README.md path relative to project_root>
-  moc_path_abs: <absolute path = project_root joined with moc_path>
+project_root: <absolute>
+lang: <normalized lang>
+dir_path: <D relative to project_root>
+claude_md_path: <D>/CLAUDE.md
+claude_md_path_abs: <project_root>/<D>/CLAUDE.md
 
-children:
-  files:
-    - source: <relative>
-      doc:    <relative, the .md already written>
-      doc_abs: <absolute>
-      status: done | failed_permanent
-    # ...list every file in this directory
-  subdirs:
-    - source: <relative>
-      moc:    <relative>
-      moc_abs: <absolute>
-    # ...list subdirectories if any
+flows_through:
+  - slug: <slug>
+    title: <flow title>
+    doc: docs/flows/<slug>.md
+    doc_rel_from_dir: <relative path from <D>/CLAUDE.md to the flow doc>
+    review_status: <passed|unconverged|orphaned>
+key_files:
+  - path: <file in D touched by a flow>
+    touched_by: [<slug>...]
+uncovered_files:
+  - <file in D not touched by any flow>
+glossary_terms:
+  - term: <term>
+    slug: <slug>
+    rel: <relative path from <D>/CLAUDE.md to docs/glossary/terms/<slug>.md>
 parent_dir:
-  source: <relative>
-  moc:    <relative>
+  source: <parent dir>
+  claude_md: <parent dir>/CLAUDE.md
 
-When done, return DONE / FAILED per protocol.
+Return DONE / FAILED per protocol.
 """
 )
 ```
 
-**Per-directory self-check**:
+On `DONE` → `directories[D] = { lang, status:"done", claude_md_path, flows_through, uncovered_files, generated_at }`. If the return has `oversize:true`, log a warn line (§4.3 budget). Write state. **Cross-directory serial**: D's `docgen-dir` must return before the next directory's dispatch.
 
-1. Did I **actually** invoke `Task(docgen-file)` for this directory? If not, **do not dispatch this**—a step upstream was missed; go back to I.3 and finish it
-2. Did I **actually** invoke `Task(docgen-dir)`, or did I just plan to mentally? If not, **send it now**
+### Step J: Merge the glossary (skip if `--no-glossary`) — §12
 
-On `docgen-dir` returning `DONE` → update `state.directories[dir_path] = { lang: <this run's lang>, status: "done", moc_path, generated_at, child_files, child_subdirs }`, then immediately Edit-write state.json.
+Layout: `docs/glossary/GLOSSARY.md` (L0 index) + `docs/glossary/terms/<slug>.md` (L1 detail, one term per file). Both use `<!-- BEGIN/END docgen:auto -->` sentinels so human edits outside survive.
 
-### Step J: Loop to the next directory
+Merge all flows' `glossary_candidates`, keyed by normalized-lowercase `term`:
+- **New term** → create `terms/<slug>.md` (slug = the term itself; for Chinese terms the term is a fine filename, or ASCII-ize if needed) with the L1 auto block: definition, code anchor, "appears in flows" links, source. Add one line to L0.
+- **Existing term** → add the new flow to that L1's "appears in flows" (inside its auto block); do not overwrite a human-polished definition outside the block.
+- **Rebuild L0** from every L1's head: `- [term](./terms/<slug>.md) — <one-line> （别名：…）`. Keep L0 < 200 lines (paginate by category if it grows past that). Use **plain markdown links, never `@import`** (imports load eagerly and defeat progressive disclosure).
+- Update `state.glossary = { terms_count, l0_path:"docs/glossary/GLOSSARY.md", generated_at }`.
+- **Orphan-term residue (§13.7 TODO-F)**: if a term's only "appears in flows" were orphaned flows, **leave it and mark stale—do not delete** (consistent with orphan-flow handling).
 
-Return to Step I for the next directory.
-
-> **Cross-directory serialization**: a directory's `docgen-dir` MUST return DONE before the next directory's I.3 begins. Reason: a parent MOC must link to its children's MOCs; running them in parallel would create dead-link windows. Within a directory, ≤ N parallel `docgen-file` Tasks per batch is allowed and expected.
-
-### Step K: Write the top-level `docs/README.md` index (you write it; do not spawn an agent)
-
-Once all directories are done, read state to get the full directory list, build a nested directory tree, and `Write` it to `<project_root>/docs/README.md`.
-
-**Title, subtitle, and section names switch by `lang`** (the **directory tree itself is not translated**—it contains file paths, kept verbatim):
-
-| Element | zh-CN | en-US | ja-JP | other lang |
-|---------|-------|-------|-------|-----------|
-| Main title | `# 项目代码文档索引` | `# Project Code Documentation Index` | `# プロジェクトコード文書インデックス` | translate the zh-CN meaning idiomatically |
-| Subtitle (generator) | `由 /docgen 自动生成 ｜ 最近更新：<ISO>` | `Generated by /docgen ｜ Last updated: <ISO>` | `/docgen により自動生成 ｜ 最終更新: <ISO>` | same |
-| Subtitle (stats) | `共 N 个文件文档 ｜ M 个目录 MOC` | `N file docs ｜ M directory MOCs` | `ファイル文書 N 件 ｜ ディレクトリ MOC M 件` | same |
-| Section 1 | `## 目录树` | `## Directory Tree` | `## ディレクトリツリー` | same |
-| Section 2 | `## 全部目录 MOC 索引` | `## All Directory MOCs` | `## 全ディレクトリ MOC` | same |
-
-Template (the outer block uses 4 backticks to avoid the inner directory-tree code block closing prematurely; the example below shows zh-CN; for other langs swap per the table above):
-
+L0 skeleton (zh-CN):
 ````markdown
-# 项目代码文档索引
+# 术语索引
 
-> 由 `/docgen` 自动生成 ｜ 最近更新：<ISO timestamp>
-> 共 N 个文件文档 ｜ M 个目录 MOC
+> 由 `/docgen` 自动维护 ｜ 共 N 条 ｜ 最近更新 <ISO>
+> 详情见 `terms/` 下对应文件（本索引不展开详情）
 
-## 目录树
-
-```
-internal/
-├── workers/    ← [MOC](./internal/workers/README.md)
-│   ├── [worker_base.go](./internal/workers/worker_base.go.md)
-│   └── ...
-└── ...
-```
-
-## 全部目录 MOC 索引
-
-- [internal/workers/](./internal/workers/README.md)
-- ...
+<!-- BEGIN docgen:auto -->
+- [回源](./terms/回源.md) — 缓存未命中时向源站拉取内容（别名：origin pull）
+<!-- END docgen:auto -->
 ````
 
-### Step L: Final self-check + report to user
+### Step K: Banners and orphans (main-thread-only header patches)
 
-**Final self-check (hard assertions; failure → tell the user the run failed)**:
+The flow-doc metadata header `review` field and all banners are written **only by you** (subagents never touch them—§11.2).
 
-```
-assert spawned_file_agents > 0  if work_set > 0
-assert spawned_dir_agents == number of directories processed
-assert paths you Write-d (.md) ⊆ { <project_root>/docs/README.md }
-```
+**K.1 Review-status back-fill**: after a flow's review sub-loop ends, patch the header line of `docs/flows/<slug>.md` (the `> ... 校验：⏳ 待校验 ...` line): `review_passed → ✅ 通过`; `review_unconverged → ⚠️ 存疑（N 轮未收敛）` (localized by `lang`). Use `Edit` on that one line.
 
-If any assertion fails → report to the user:
-
-```
-❌ /docgen internal state inconsistent
-  reason: <never_spawned_file_agents | missing_dir_moc | self_wrote_file_doc>
-  spawned_file_agents: <N>
-  spawned_dir_agents: <N>
-  work_set: <N>
-
-Please file an issue with the maintainer; do not treat the current docs/ as a valid result.
+**K.2 Unconverged banner (§10.4)**: for `review_unconverged` flows, insert at the top of the doc (after the title) a localized banner listing the reviewer's still-open issues:
+```markdown
+> ⚠️ **本流程文档未通过校验** ｜ 校验轮次：<N> ｜ 生成于 <ISO>
+> reviewer 仍存疑的点（请以源码为准）：
+> - <hop>: <problem>
 ```
 
-If all assertions pass, emit the success report:
+**K.3 Orphan flow (§13.4)**: an entry that vanished this run → **do not delete** the doc; set `status:"orphaned"` and insert a localized banner:
+```markdown
+> ⚠️ **本流程对应的入口已不存在** ｜ 上次见于 <last_run_sha> ｜ 标记于 <ISO>
+> 该流程可能已废弃或入口被重命名/重构，内容可能过期，请以源码为准。
+```
+If the entry reappears in a later run, clear the orphan mark and regenerate.
 
+### Step L: Top-level index, cleanup, final report
+
+**L.1 Write `docs/README.md`** (you write it; do not spawn an agent). Sections (titles switch by `lang`; paths kept verbatim):
+- **Flow list** — link every `docs/flows/*.md` with its review status (✅/⚠️/orphan).
+- **Directory tree** — link each directory's `CLAUDE.md`.
+- **Glossary entry** — link `docs/glossary/GLOSSARY.md` (omit if `--no-glossary`).
+- **Uncovered files** — list `coverage.uncovered` explicitly (honesty over false completeness).
+
+**L.2 Finalize state**: set `last_run`, `last_run_sha = git rev-parse HEAD`, `config` (incl. `lang`, `max_depth`), `coverage` counts. Write `docs/.docgen-state.json`.
+
+**L.3 Clean up scratch**: `rm -rf "<project_root>/docs/.docgen-scratch"` (disarms the hooks). Safe to remove unconditionally—it's volatile.
+
+**L.4 Final self-check** (hard assertions; failure → report the run as failed, do not paper over):
+```
+assert Task(docgen-flow) calls made           == number of flows in the work set   (≥1 if work set > 0)
+assert Task(docgen-flow-review) calls made     >= number of flows reviewed          (unless --no-review)
+assert Task(docgen-dir) calls made             == number of directories processed
+assert every .md you Write-d directly ⊆ { docs/README.md, docs/glossary/** }
+       and every CLAUDE.md you Edit-ed touched only inside docgen:auto markers
+```
+> ⚠️ If `Task(docgen-flow) == 0` while the work set > 0—you never actually spawned. **Report failure**; don't write flow docs yourself.
+
+**L.5 Success report** (English):
 ```
 ✅ /docgen completed
 
-  Target:           <target_path>
-  Output language:  <lang>
-  Candidates:       <total_candidates>
-  Work set:         <work_set>
-  ✓ Done:           <done>
-  ✗ Permanent fail: <failed_permanent>
-  ⊝ Skipped (hash unchanged): <skipped>
-  Elapsed:          <duration_seconds> s
+  Target:            <target_path>
+  Output language:   <lang>
+  Entry points:      <N>
+  Flows generated:   <done>
+  ✓ Review passed:   <P>
+  ⚠️ Review unconverged: <U>
+  ⊘ Orphaned flows:  <O>
+  ✗ Permanent fail:  <F>
+  ⊝ Skipped (unchanged): <S>
+  Directories (CLAUDE.md): <M>
+  Glossary terms:    <T>            (omitted if --no-glossary)
+  Coverage:          <touched>/<candidates_total> files touched
+  Uncovered files:   <K>  (listed in docs/README.md)
+  Elapsed:           <sec> s
 
-  State file:       <project_root>/docs/.docgen-state.json
-  Top-level index:  <project_root>/docs/README.md
-
-Notes:
-  - Permanently failed files have .FAILED.md placeholders; the next /docgen run retries them by default
-  - Incremental logic active: unchanged files are skipped; pass --force for a full regeneration
+  Flows:       <project_root>/docs/flows/
+  Glossary:    <project_root>/docs/glossary/GLOSSARY.md
+  State file:  <project_root>/docs/.docgen-state.json
+  Top index:   <project_root>/docs/README.md
 ```
 
 ---
 
 ## Common mistakes (cautionary tales)
 
-> The quoted lines below are **examples of past failure modes**—they are NOT what you should do. Each anti-pattern is followed by what to do instead.
+> Quoted lines are **past failure modes**, NOT instructions.
 
-### ❌ Mistake 1: skipping the Step F fallback
-
-> "git diff returned nothing, so work_set is empty—DONE."
-
-**Correct**: on FIRST_RUN git diff is also empty, but state is empty too, so **every candidate must enter work_set**.
-
-### ❌ Mistake 2: narrating the spawn instead of spawning
-
-> "I'm going to spawn 14 docgen-file Tasks for the files under workers/..." and then stops.
-
-**Correct**: **actually invoke the Task tool**. In Claude Code, "spawn" = a real `Task` call with full parameters.
-
-### ❌ Mistake 3: forgetting docgen-dir
-
-> "All 14 files are done—DONE."
-
-**Correct**: you also need to spawn one `docgen-dir` to write that directory's `README.md` MOC; only then is the directory complete.
-
-### ❌ Mistake 4: not updating state
-
-> Never writes state.json during the run.
-
-**Correct**: Edit state.json after every docgen-file batch completes; also after each docgen-dir completes. This is what makes interruptions recoverable.
-
-### ❌ Mistake 5: reading source and writing docs yourself
-
-> Directly Read source code and Write `*.go.md` from the orchestrator.
-
-**Correct**: you are the scheduler; **never read the full source content**. Reading source and writing per-file docs is `docgen-file`'s job.
-
----
+- ❌ "git diff returned nothing → work set empty → DONE." On FIRST_RUN diff is empty too, but state is empty, so **every entry enters the work set**.
+- ❌ "I'm going to spawn the flow Tasks…" then stops. **Actually invoke `Task`**—spawning = a real tool call.
+- ❌ "All flows generated → DONE." You still owe the review sub-loops, the directory CLAUDE.md files, the glossary, the banners, and the top index.
+- ❌ Overwriting a hand-written `CLAUDE.md`. The subagent only edits inside `docgen:auto` markers; verify your inputs don't ask it to do otherwise.
+- ❌ Reading source and writing flow docs yourself. You are the scheduler—`docgen-flow` reads source; you never do.
+- ❌ Forgetting to wipe `docs/.docgen-scratch` at the end—leaves the PreToolUse guard armed for the user's later unrelated work (the next run's Step C.1 wipe also covers this, but clean up anyway).
 
 ## Hard constraints
 
-1. **MUST actually invoke the Task tool** to spawn child agents (`subagent_type: docgen-file` / `docgen-dir`)
-2. **Edit state.json immediately after every batch / every directory completes**
-3. **Cross-directory serial**, within-directory parallel up to `concurrency` (one batch of N Tasks at a time)
-4. **Retries happen at most once per file within a single run**
-5. **Do not `git commit` / `git add`**
-6. **Do not modify `.claude/` or source code**
-7. **The top-level `docs/README.md` is written by you** (do not spawn an agent for it)
-8. **Generated documentation content** is emitted in the `lang` from Step A.1 (top-level README headings, the `lang` field passed to subagents). **The orchestration layer (your status / error output to the user) MUST use English**—do not conflate these two
+1. **Actually invoke `Task`** for `docgen-flow` / `docgen-flow-review` / `docgen-dir`.
+2. **Write state after each flow reaches a terminal status and after each directory completes** (resume depends on it).
+3. **Per-flow pipelines run in parallel** up to `--concurrency`; **directories are serial, deepest first**.
+4. **Review rounds are uncapped by default** but stop on oscillation or `--max-review-rounds`.
+5. **Discard reviewer issues without `file:line` evidence.**
+6. **Do not delete orphan flow docs or unconverged docs**—banner them.
+7. **Refresh the coverage ledger every run**, including incremental.
+8. **Wipe `docs/.docgen-scratch` at start (all stale) and end (this run).**
+9. **Do not `git commit` / `git add`; do not modify `.claude/` or source code.**
+10. **Generated content follows `lang`; your status/error output is English.**
 
-## Bash command list (whitelist these in user / project settings before first use)
-
-> If a Bash permission prompt fires on first use, your `~/.claude/settings.json` or project-local `.claude/settings.local.json` is missing one of these. See the plugin README's "Recommended settings snippet" and merge it in.
+## Bash command list (whitelist these in settings before first use)
 
 ```bash
-# git changes
-git -C <root> diff --name-only HEAD~1 HEAD
-git -C <root> diff --name-only HEAD
+git -C <root> rev-parse HEAD ; git -C <root> rev-parse --show-toplevel
+git -C <root> diff --name-only <sha> HEAD ; git -C <root> diff --name-only HEAD
 git -C <root> ls-files --others --exclude-standard
-
-# file size
-wc -l <file>; wc -c <file>
-
-# sha256 (with comments/whitespace stripped)
-sed -E -e 's|//.*$||' -e ':a;N;$!ba;s|/\*[^*]*\*+([^/*][^*]*\*+)*/||g' <file> \
-  | tr -s '[:space:]' ' ' \
-  | sha256sum | awk '{print $1}'
-
-# Create directories (subagents handle their own mkdir;
-# you may need this only when writing the top-level README.md)
-mkdir -p $(dirname <doc_path_abs>)
-
-# Read environment variables (when resolving $DOCGEN_PROJECT_ROOT / $DOCGEN_LANG)
-printenv DOCGEN_LANG
-printenv DOCGEN_PROJECT_ROOT
+grep -nE '<entry patterns>' <files>            # entry discovery
+wc -l <file> ; test -f <file>
+sed -E -e 's|//.*$||' -e ':a;N;$!ba;s|/\*[^*]*\*+([^/*][^*]*\*+)*/||g' <file> | tr -s '[:space:]' ' ' | sha256sum | awk '{print $1}'
+mkdir -p <dir> ; rm -rf <project_root>/docs/.docgen-scratch
+printenv DOCGEN_LANG ; printenv DOCGEN_PROJECT_ROOT
 ```
 
 ## Failure backstops
 
-- state.json fails to parse → fail to user; suggest `--force` or manually deleting state and re-running
-- All git commands fail → fall back to "full" mode (treat all candidates as work_set)
-- A `Task` invocation itself errors → bump `attempts` and follow the retry path
-- A `Write` fails → terminate the run, but keep already-saved state intact
+- state.json unparseable → fail to user; suggest `--force` or deleting state.
+- Old v1/v2 state → tell the user to `--force` (no auto-migration to flow model).
+- All git commands fail → degrade to full mode (all entries → work set).
+- A `Task` errors → bump `attempts`, follow the retry path.
+- A `Write` fails → terminate the run but keep saved state intact.
+- Entry discovery empty → fail loudly asking for `--entry=`.
 
 ## Example invocations
 
 ```
-/docgen internal/workers
-/docgen pkg/auth --concurrency=4
-/docgen . --include='*.go' --exclude='**/vendor/**'
-/docgen pkg/auth/handler --force
-/docgen lua/ --include='*.lua'
-/docgen src --lang=en-US                                        # output in English
-/docgen src --lang=ja-JP                                        # output in Japanese
-/docgen src --lang=英文                                          # alias works → en-US
+/docgen internal/service
+/docgen pkg/auth --entry='POST /api/v1/login'
+/docgen . --max-depth=8 --concurrency=4
+/docgen . --no-review --no-glossary            # fast structural pass
+/docgen src --lang=en-US
+/docgen pkg/auth --force
+/docgen lua/ --include='*.lua' --entry='handler.entry'
+/docgen lua/ --include='*.lua' --profile=generic
 ```

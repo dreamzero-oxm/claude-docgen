@@ -4,15 +4,15 @@
     "name": "dreamzero-oxm",
     "url": "https://github.com/dreamzero-oxm"
   },
-  "description": "Claude Code plugin marketplace: multi-agent code documentation generator (multilingual, default Simplified Chinese)",
+  "description": "Claude Code plugin marketplace: flow-centric multi-agent code documentation generator (call-graph flows, adversarial review, multilingual, default Simplified Chinese)",
   "plugins": [
     {
       "name": "docgen",
       "source": "./plugins/docgen",
-      "description": "Multi-agent code documentation generator with incremental updates and resume support; configurable output language (default zh-CN)",
-      "version": "0.3.0",
+      "description": "Flow-centric multi-agent code documentation generator: DFS call-chain flow docs with adversarial review, per-directory CLAUDE.md context guides, progressive-disclosure glossary; incremental + resume; configurable output language (default zh-CN)",
+      "version": "0.4.0",
       "category": "documentation",
-      "keywords": ["docgen", "documentation", "markdown", "subagent", "incremental", "multilingual", "i18n", "chinese", "english", "japanese"]
+      "keywords": ["docgen", "documentation", "markdown", "subagent", "incremental", "call-graph", "flow", "multilingual", "i18n", "chinese", "english", "japanese"]
     }
   ]
 }

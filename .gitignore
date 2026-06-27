@@ -26,3 +26,6 @@ __pycache__/
 
 # 不要把任何项目的 docgen 运行产物 checkin 进 marketplace 仓库
 docs/.docgen-state.json
+docs/.docgen-scratch/
+
+# docs
