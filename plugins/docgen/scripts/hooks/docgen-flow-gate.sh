@@ -164,9 +164,32 @@ EOF
   fi
 fi
 
-# 汇总：有 issue 就 block，否则放行。
+# 汇总：有 issue 就 block，否则落 done 标记后放行。
 if [ -n "$issues" ]; then
   block "$(printf 'docgen-flow 产物机械校验未通过（第 %s 次，上限 %s），请修正后重试：%b' "$((retry_count + 1))" "$MAX_RETRY" "$issues")"
 fi
+
+# —— 确定性落盘：校验全过，写 done/<slug>.done（设计 §三，治 R1/R2）——
+# 用途：主线程收尾从 scratch 对账「哪些流程其实已生成完」，即使主线程写盘前被打断也不丢。
+# 关键设计点：hook 本就解析过 FLOW_DOC 与触达引用，这里零额外成本顺手落盘。
+write_done_marker() {
+  local done_dir slug rel_doc
+  done_dir="$(docgen_done_dir 2>/dev/null)" || { echo "info: flow-gate 无活动 run，跳过 done 标记" >&2; return 0; }
+  slug="$(docgen_slug_from_flow_path "$FLOW_DOC" 2>/dev/null)" || { echo "info: flow-gate 无法从 $FLOW_DOC 提取 slug，跳过 done 标记" >&2; return 0; }
+  mkdir -p "$done_dir" 2>/dev/null || { echo "info: flow-gate 无法创建 done 目录 $done_dir" >&2; return 0; }
+  # flow_doc 归一为相对 project_root
+  rel_doc="$FLOW_DOC"
+  case "$rel_doc" in "$PROJECT_ROOT"/*) rel_doc="${rel_doc#"$PROJECT_ROOT"/}" ;; esac
+  # 从文档「触达文件清单」抽相对路径引用（去行号、去 docs/ 自身与 .md）
+  local touched
+  touched="$(grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z0-9]+:[0-9]+' "$FLOW_DOC" 2>/dev/null \
+    | sed -E 's/:[0-9]+$//' | sort -u \
+    | grep -vE '^(docs/|http)' | grep -vE '\.md$' | tr '\n' ' ')"
+  {
+    printf 'flow_doc=%s\n' "$rel_doc"
+    printf 'touched=%s\n' "$touched"
+  } > "$done_dir/$slug.done" 2>/dev/null || echo "info: flow-gate 写 done 标记失败 $done_dir/$slug.done" >&2
+}
+write_done_marker
 
 pass
