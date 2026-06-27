@@ -16,8 +16,8 @@ Trigger this skill when any of the following is true:
 - The user asks to document a repo/directory **by its flows or call chains** ("from the entry points", "trace the request", "按调用链/从入口")
 - The user wants their `docs/` populated automatically, or per-directory `CLAUDE.md` guides written
 - The user wants a project glossary / terminology index built
-- A previous docgen run was interrupted and the user wants to resume
-- The user wants an incremental regenerate based on git changes
+- A previous docgen run was interrupted and the user wants to resume（中断重跑可精确接续：已生成的流程不重做，review 按轮恢复）
+- The user wants an incremental regenerate based on git changes（代码改动后符号级增量更新：仅流程真正走过的符号变了才重生成）
 - The user wants to force a full regeneration (`--force`) or switch the docs to another language
 
 Do **not** use for:

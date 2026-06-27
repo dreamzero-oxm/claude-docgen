@@ -200,8 +200,11 @@ After each run, state lives at `<project_root>/docs/.docgen-state.json`:
 
 Highlights:
 
-- **Flow is the atomic unit** of incremental + resume. A flow is regenerated whole when any file it touched changes (`file_to_flows` reverse index + sha256 second-confirm); there is no mid-flow checkpoint.
+- **Flow is the atomic unit** of incremental + resume. DFS generation is atomic (a flow regenerates whole, no mid-flow checkpoint), but the **review rewrite loop is resumable** — see below.
 - **Terminal statuses** (`review_passed` / `review_unconverged` / `orphaned`) are skipped on resume; everything else re-runs.
+- **Deterministic resume**: a `SubagentStop` hook records each flow's completion (and each reviewer's verdict/round) to scratch; an interrupted run resumes without redoing completed flows or replaying review rounds. A `run_active` flag in state marks an unfinished run and fixes the incremental base SHA.
+- **Symbol-level incremental**: when a callgraph provider (gopls) is available, a flow is regenerated only if a changed file's changed *symbols* lie on its walked call path (not merely the same file); regeneration reuses the previous doc for localized edits. Falls back to file-level sha when the provider is unavailable.
+- **Stale, not deleted**: orphaned flows, dead glossary terms, and stale directory guides get a ⚠️ banner inside the `docgen:auto` block; nothing is deleted, and banners self-heal when the source returns.
 - **Coverage ledger** is refreshed every run, including incremental—files no flow touched are listed in `docs/README.md`.
 - **Per-flow `lang`** drives language-switch regeneration without `--force`.
 - Re-running after an interruption resumes automatically; `--force` or deleting the state file forces a full rebuild.
