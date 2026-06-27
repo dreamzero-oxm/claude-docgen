@@ -195,6 +195,8 @@ test -f <project_root>/docs/.docgen-state.json && echo EXISTS || echo FIRST_RUN
       "attempts": 1,
       "flow_doc_path": "docs/flows/<slug>.md",
       "touched_files": { "<rel path>": "<sha256>" },
+      "walked_symbols": ["<pkg.Symbol@file:line>"],
+      "dirty_granularity": "symbol | file",
       "review": { "status": "passed | failed_unconverged", "rounds": 0, "last_issues": [] },
       "generated_at": "..."
     }
@@ -215,6 +217,9 @@ test -f <project_root>/docs/.docgen-state.json && echo EXISTS || echo FIRST_RUN
 - **`run_active`**（v3.1 新增，§三）：非 `null` 表示有一次 run 正在进行 / 上次未正常收尾。`started_at` + `base_sha`（启动时 HEAD）。收尾（Step L）置 `null`。下次启动若残留 → 进续跑模式，增量基准用 `run_active.base_sha`（治「last_run_sha 收尾才写、中断后基准偏」）。读到缺该字段的旧 v3 state → 当作 `null`，不要求 --force。
 - **FIRST_RUN**: init in memory `{ "version":3, "flows":{}, "directories":{}, "entries":[], "file_to_flows":{}, "dir_to_flows":{}, "coverage":{}, "glossary":{}, "config":{...}, "last_run":null, "last_run_sha":null, "run_active":null }`.
 - **EXISTS**: Read & parse. **If `version < 3`** (old v1/v2 per-file state): the architecture changed from per-file to flow-centric—the old `files` map is not convertible. Tell the user: `⚠️ State is v<N> (per-file). The flow-centric architecture needs a rebuild; re-run with --force to regenerate.` Then either proceed as `--force` (if they passed it) or stop. Do **not** try to migrate `files` into `flows`.
+- **`walked_symbols`**（v3.1，§五.1）：该流程 DFS 实际走过的符号链（`pkg.Symbol@file:line`），由 `docgen-flow` 回报。增量符号级细判的依据。
+- **`dirty_granularity`**（v3.1，§五.1）：本次对该流程用的判定粒度——`symbol`（provider 可用、符号级）或 `file`（provider 不可用 / 非 Go / 降级生成的流程，退文件级）。如实记录，报告体现。
+- **v3 → v3.1 是纯增字段，兼容**：`version` 字段读到 `3` 或 `3.1` 都正常处理；写回时标 `3.1`。缺 `run_active`/`walked_symbols`/`dirty_granularity` 的旧 v3 按默认值补齐（`walked_symbols:[]` + `dirty_granularity:"file"` + `run_active:null`），**不**触发「需要 --force 重建」（那只针对 v1/v2 的 per-file → flow 不可转换的情形）。
 - **续跑检测（§三）**：解析后检查 `run_active`：
   - `run_active != null` → **上次 run 未正常收尾**，进入**续跑模式**：本次增量基准 SHA 用 `run_active.base_sha`（而非 `last_run_sha`）；并执行「scratch 对账」（见 Step L.0，但对账逻辑在续跑时于 Step F 之前先跑一次，把 done 标记里的流程在内存状态里标终态，避免重复生成）。记 info：`info: detected unfinished run (run_active since <started_at>), resuming from base_sha <...>`。
   - `run_active == null`（或缺字段）→ 正常增量/全量路径。
@@ -336,7 +341,7 @@ Return DONE / PARTIAL / FAILED per your protocol (with touched_files + sha256 + 
 Set `model: "opus"` for entries you expect to fan out widely (many touched files). Pass only concrete paths, never globs.
 
 **G.2 On return → update state**:
-- `DONE`/`PARTIAL` (doc written) → `flows[slug] = { ..., status: "flow_done", touched_files: {<from return, with sha256>}, attempts: prev+1, generated_at }`, stash `glossary_candidates`. Proceed to G.3.
+- `DONE`/`PARTIAL` (doc written) → `flows[slug] = { ..., status: "flow_done", touched_files: {<from return, with sha256>}, walked_symbols: <from return>, dirty_granularity: <"symbol" if callgraph provider was used for this flow else "file">, attempts: prev+1, generated_at }`, stash `glossary_candidates`. Proceed to G.3.
 - `FAILED` → `attempts = prev+1`. If `< 2`, requeue. If `== 2`, `status` stays non-terminal but write a `.FAILED.md` placeholder (replace trailing `.md` → `.FAILED.md`, absolute path, content = reason + "delete attempts from state or rerun --force") and stop retrying this flow.
 
 **G.3 Review sub-loop** (skip entirely if `--no-review`; then treat `flow_done` as terminal `review_passed` with `review.status:"passed", rounds:0`):

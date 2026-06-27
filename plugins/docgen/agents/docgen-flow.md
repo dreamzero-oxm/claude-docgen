@@ -174,6 +174,9 @@ touched_files:
     sha256: <64-char hex, computed per the command below>
   - path: <rel path 2>
     sha256: ...
+walked_symbols:
+  - <pkg.Symbol@file:line>
+  - ...
 glossary_candidates:
   - term: <...>
     category: business_concept | code_symbol
@@ -189,6 +192,8 @@ sed -E -e 's|//.*$||' -e ':a;N;$!ba;s|/\*[^*]*\*+([^/*][^*]*\*+)*/||g' <file> \
   | tr -s '[:space:]' ' ' \
   | sha256sum | awk '{print $1}'
 ```
+
+- **`walked_symbols`**（v3.1）：本次 DFS 实际展开过的符号链，每项 `pkg.Symbol@file:line`（与调用链总览各跳一致；环/已访问节点只记一次）。编排器据此做增量符号级细判，所以要如实只列「真的读进去分析过」的符号，不要把跟不下去的断点候选混进来。
 
 On **partial** (doc written but some hops unresolved beyond the honest break notes—still a valid deliverable):
 
