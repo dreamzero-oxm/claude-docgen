@@ -81,6 +81,34 @@ docgen_in_run() {
   docgen_active_run_dir >/dev/null 2>&1
 }
 
+# 当前 run 的 done 标记目录（不保证存在）。无 run 返回非零。
+# done/<slug>.done 由 SubagentStop(docgen-flow) 在校验放行时写入，
+# 供主线程收尾对账「哪些流程其实已生成完」（设计 §三）。
+docgen_done_dir() {
+  local rd; rd="$(docgen_active_run_dir)" || return 1
+  printf '%s/done' "$rd"
+}
+
+# 当前 run 的 review 进度目录（不保证存在）。无 run 返回非零。
+# review/<slug>.json 由 SubagentStop(docgen-flow-review) 写入，记 rounds/裁决/未解 issue（设计 §四）。
+docgen_review_dir() {
+  local rd; rd="$(docgen_active_run_dir)" || return 1
+  printf '%s/review' "$rd"
+}
+
+# 从流程文档路径提取 slug。
+# 入参 $1：docs/flows/<slug>.md 或 docs/flows/_shared/<slug>.md（可为绝对路径）。
+# 共享节点（_shared/ 子目录）归一为 _shared__<name>，避免子目录分隔符进 done/review 文件名。
+# 失败（不匹配 flows 路径）返回非零。
+docgen_slug_from_flow_path() {
+  local p="$1" tail
+  case "$p" in
+    *docs/flows/_shared/*) tail="${p##*docs/flows/_shared/}"; printf '_shared__%s' "${tail%.md}"; return 0 ;;
+    *docs/flows/*)         tail="${p##*docs/flows/}";         printf '%s' "${tail%.md}";          return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # 输出一段 JSON 到 stdout（hook 协议的标准回传方式）。
 docgen_emit() {
   printf '%s\n' "$1"
