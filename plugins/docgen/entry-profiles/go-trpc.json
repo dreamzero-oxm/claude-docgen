@@ -1,0 +1,13 @@
+{
+  "name": "go-trpc",
+  "lang": "go",
+  "file_glob": "*.go",
+  "entry_patterns": [
+    { "kind": "rpc_method",     "grep": "Register.*Service|trpc\\.|\\.Register\\(" },
+    { "kind": "http_route",     "grep": "\\.(GET|POST|PUT|DELETE|PATCH|Any|Handle)\\(|HandleFunc\\(" },
+    { "kind": "main",           "grep": "func (main|init)\\(" },
+    { "kind": "exported_iface", "grep": "func \\([a-z]+ \\*?[A-Z][A-Za-z]*(Svc|Service|Server|Handler)\\) [A-Z]" },
+    { "kind": "cron",           "grep": "Cron|AddFunc|Subscribe|Consume|NewConsumer" }
+  ],
+  "false_positive_filters": ["*_test.go", "^\\s*//", "^\\s*#", "vendor/", "*.gen.go", "mock", "example"]
+}

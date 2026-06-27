@@ -1,0 +1,9 @@
+{
+  "name": "generic",
+  "lang": "*",
+  "file_glob": "*",
+  "entry_patterns": [
+    { "kind": "exported_iface", "grep": "^(export )?(func|def|function|public|fn) [A-Z][A-Za-z0-9_]*" }
+  ],
+  "false_positive_filters": ["*_test.*", "*.test.*", "^\\s*//", "^\\s*#", "vendor/", "node_modules/", "*.gen.*", "mock", "example"]
+}
