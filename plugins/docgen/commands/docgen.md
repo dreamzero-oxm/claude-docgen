@@ -104,11 +104,15 @@ Rules:
 - `--no-shared` boolean: disable pre-extraction of shared hotspot nodes; every flow walks its full chain (more tokens, simpler). Default: shared extraction **on** (requires callgraph; auto-off if `--no-callgraph`).
 - `--shared-threshold=N` fan-in threshold for treating a node as a shared hotspot. Default 3.
 - `--force` boolean: ignore all incremental logic; regenerate everything.
+- `--refs=<path-or-url>` may repeat: reference material to distill before generation (local file, local dir, or `http(s)://` doc-site URL). Presence triggers Step E.2. Default: none.
+- `--refs-budget=N`: token cap on the distilled domain primer. Default 2000. (The seed terms are separate.)
+- `--refs-max-pages=N`: page cap when a `--refs` URL's left-nav TOC is crawled. Default 60.
+- `--refs-no-refetch` boolean: reuse last run's distilled refs instead of re-fetching URLs (URL refs are re-fetched every run by default, since remote change can't be judged by sha). Default: re-fetch on.
 - `--selftest` boolean: diagnostic mode—verify what fields the hooks actually receive on this Claude Code build, then exit. Does NOT run normal documentation generation. See "Self-test mode" below.
 
 If `path` is empty, fail loudly:
 ```
-❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--profile=NAME] [--selftest] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--force]
+❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--profile=NAME] [--selftest] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--refs=PATH|URL] [--refs-budget=N] [--refs-max-pages=N] [--refs-no-refetch] [--force]
 ```
 
 ### Step A.1: Resolve output language (`lang`)
@@ -181,6 +185,7 @@ test -f <project_root>/docs/.docgen-state.json && echo EXISTS || echo FIRST_RUN
   "last_run": "<ISO>",
   "last_run_sha": "<git rev-parse HEAD at last run>",
   "run_active": { "started_at": "<ISO>", "base_sha": "<本次 run 启动时 HEAD>" },
+  "refs_distill": { "status": "done | empty | failed", "refs_files": { "<path-or-url>": "<sha256 or content-hash>" }, "primer_path": "docs/.docgen-scratch/run/refs/primer.md", "seed_path": "docs/.docgen-scratch/run/refs/glossary-seed.json", "generated_at": "<ISO>" },
   "config": { "project_root": "...", "include": ["*.go"], "exclude": [],
               "lang": "zh-CN", "max_depth": 6 },
   "entries": [
@@ -255,6 +260,37 @@ and exit.
 **Assign a stable `flow-slug` to each entry** (filename + state key; must be globally unique):
 - HTTP route → `<method>_<path>` (e.g. `post_api_v1_login`); RPC/method → `<pkg>_<struct>_<method>`; main/cron/consumer → `<pkg>_<symbol>`. Normalize illegal filename chars (`/`→`_`, strip leading `/`, lowercase).
 - **Collision fallback**: if two entries normalize to the same slug, append `_2`, `_3`, … and persist the chosen slug in `entries[].slug` so incremental re-runs recompute the *same* slug from the entry fields (no slug drift).
+
+### Step E.2: Distill reference material (skip if no `--refs`)
+
+If `--refs` was passed, spawn **one** `docgen-refs` Task before deciding the work set, so its distilled primer/seed are available to every flow. If no `--refs`, skip this entire step (primer/seed are empty).
+
+**Incremental skip**: if `state.refs_distill.status == "done"` AND every **local** ref's sha256 is unchanged AND there are no URL refs (or `--refs-no-refetch` was passed) AND the scratch products still exist → reuse them, do NOT re-spawn. Otherwise (any local ref changed/added/removed, OR any URL ref present without `--refs-no-refetch`) → re-spawn. Log one info line either way.
+
+```
+Task(
+  subagent_type: "docgen-refs",
+  description: "distill refs",
+  prompt: """
+You are docgen-refs. Distill the reference material below into a domain primer + glossary seed.
+
+project_root: <absolute>
+lang: <normalized lang>
+refs:
+  - <each --refs value verbatim: local path or http(s) URL>
+refs_budget: <--refs-budget or 2000>
+refs_max_pages: <--refs-max-pages or 60>
+out_primer_abs: <project_root>/docs/.docgen-scratch/run/refs/primer.md
+out_seed_abs:   <project_root>/docs/.docgen-scratch/run/refs/glossary-seed.json
+
+Return DONE / EMPTY / FAILED per your protocol.
+"""
+)
+```
+
+On return:
+- `DONE` → read `primer.md` (cap its injected size at `--refs-budget`) and `glossary-seed.json`; record `state.refs_distill = { status:"done", refs_files:{<local path>:<sha256>, <url>:<content-hash-or-empty>}, primer_path, seed_path, generated_at }`. Hold the primer text in memory for Step G injection; hold the seed for Step J merge.
+- `EMPTY`/`FAILED` → log info `info: refs distill <empty|failed>, proceeding without primer`; set `state.refs_distill.status` accordingly; continue as if no `--refs` (primer/seed empty). **Never abort the main run over refs.**
 
 ### Step F: Decide the work set (which flows to (re)generate)
 
@@ -334,6 +370,8 @@ max_depth: <N>
 mermaid: <true|false>          # false iff --no-mermaid
 callgraph: <true|false>        # false iff --no-callgraph
 mode: business
+domain_primer: |               # from Step E.2; omit entirely if no refs / refs empty
+  <distilled primer.md content, capped at --refs-budget>
 shared_nodes:
   - symbol: <pkg.Symbol>          # from Step F.6; omit this block entirely if --no-shared
     doc_path: docs/flows/_shared/<slug>.md
@@ -372,6 +410,8 @@ You are docgen-flow-review. Independently re-read the source and verify the flow
 project_root: <absolute>
 flow_doc_path_abs: <project_root>/docs/flows/<slug>.md
 callgraph: <true|false>        # false iff --no-callgraph was passed; missing → assume true
+domain_primer: |               # from Step E.2; omit entirely if no refs. Use ONLY to check business naming, NOT to relax fact-checking.
+  <distilled primer.md content>
 touched_files:
   - <rel path 1>
   - <rel path 2>
@@ -444,12 +484,14 @@ On `DONE` → `directories[D] = { lang, status:"done", claude_md_path, flows_thr
 
 Layout: `docs/glossary/GLOSSARY.md` (L0 index) + `docs/glossary/terms/<slug>.md` (L1 detail, one term per file). Both use `<!-- BEGIN/END docgen:auto -->` sentinels so human edits outside survive.
 
-Merge all flows' `glossary_candidates`, keyed by normalized-lowercase `term`:
+Merge all flows' `glossary_candidates` **plus the refs `glossary-seed.json` from Step E.2** (if any), keyed by normalized-lowercase `term`:
+- **Source priority (§六)**: `refs` (人工种子) outranks `flow` (auto-extracted). When the same term comes from both → take the **definition** from the refs seed (more authoritative), but still accumulate the auto-extracted "appears in flows" links. Mark the L1 head `来源：refs(人工) + 自动出现于 N 条流程`.
+- **Refs seed term with NO flow touching it** → still create its L1 file and L0 line; **do NOT mark it stale** (it is user-provided authoritative knowledge, unlike a dead auto-extracted term — §六.2). L0 may tag it `来源：refs`.
 - **New term** → create `terms/<slug>.md` (slug = the term itself; for Chinese terms the term is a fine filename, or ASCII-ize if needed) with the L1 auto block: definition, code anchor, "appears in flows" links, source. Add one line to L0.
 - **Existing term** → add the new flow to that L1's "appears in flows" (inside its auto block); do not overwrite a human-polished definition outside the block.
 - **Rebuild L0** from every L1's head: `- [term](./terms/<slug>.md) — <one-line> （别名：…）`. Keep L0 < 200 lines (paginate by category if it grows past that). Use **plain markdown links, never `@import`** (imports load eagerly and defeat progressive disclosure).
 - Update `state.glossary = { terms_count, l0_path:"docs/glossary/GLOSSARY.md", generated_at }`.
-- **Dead-term staling (§六.2, replaces old TODO-F)**: after rebuilding each L1 term, look at its "appears in flows" list. If **every** referencing flow is `orphaned` or no longer in `state.flows`, the term is dead:
+- **Dead-term staling (§六.2, replaces old TODO-F)**: after rebuilding each L1 term, look at its "appears in flows" list. If **every** referencing flow is `orphaned` or no longer in `state.flows` **AND the term's source is not `refs`**, the term is dead:
   - Insert at the top of that L1 file's `docgen:auto` block a localized banner: `⚠️ 本术语来源流程均已失效，可能过期`（en-US: `⚠️ All source flows of this term are gone; may be stale`）。
   - In the L0 index line for this term, append `（⚠️过期）` / `(⚠️ stale)`。
   - **Do NOT delete** the L1 file or the L0 line.
@@ -536,6 +578,7 @@ assert every .md you Write-d directly ⊆ { docs/README.md, docs/glossary/** }
   ⊝ Skipped (unchanged): <S>
   Directories (CLAUDE.md): <M>
   Glossary terms:    <T>            (omitted if --no-glossary)
+  Refs distilled:    <pages_fetched> pages, <seed_terms> seed terms   (omitted if no --refs)
   ⚠️ Stale derived artifacts: <D> terms, <E> dirs   (banners inserted, not deleted)
   Coverage:          <touched>/<candidates_total> files touched
   Uncovered files:   <K>  (listed in docs/README.md)
@@ -546,6 +589,8 @@ assert every .md you Write-d directly ⊆ { docs/README.md, docs/glossary/** }
   State file:  <project_root>/docs/.docgen-state.json
   Top index:   <project_root>/docs/README.md
 ```
+
+> **Primer-change note (§五.4)**: if the distilled primer changed this run but only code-dirty flows were regenerated, append after the report: `ℹ️ domain primer updated; run with --force to re-apply new terminology across all flows`. A primer change alone does **not** mark existing flows stale.
 
 ---
 
