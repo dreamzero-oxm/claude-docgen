@@ -47,6 +47,36 @@ Everything goes under `<project_root>/docs/` (**plural**, at the **project root*
 
 ---
 
+## Self-test mode (`--selftest`)
+
+When `$ARGUMENTS` contains `--selftest`, do NOT run the normal workflow. Instead:
+
+1. Resolve `project_root` (Step B). Create the scratch dir **plus a selftest marker**:
+   ```bash
+   rm -rf "<project_root>/docs/.docgen-scratch"
+   mkdir -p "<project_root>/docs/.docgen-scratch/run/agents" \
+            "<project_root>/docs/.docgen-scratch/run/gate" \
+            "<project_root>/docs/.docgen-scratch/run/selftest"
+   ```
+2. Spawn ONE minimal `docgen-flow` Task whose prompt instructs it to simply `Write` a one-line file to `docs/flows/_selftest.md` (content: `selftest ok`) and return `DONE`—no real analysis. This causes SubagentStart, one PreToolUse(Write), and SubagentStop to fire, each dumping its raw input under `selftest/`.
+3. Read every `docs/.docgen-scratch/run/selftest/*.json`. For each event, check whether it carries `agent_id`, `subagent_type`, `cwd`, `tool_input.file_path`.
+4. Print a report (English), e.g.:
+   ```
+   /docgen --selftest results
+     SubagentStart : agent_id=<yes|no>  subagent_type=<yes|no>  cwd=<yes|no>
+     PreToolUse    : agent_id=<yes|no>  tool_name=<yes|no>  tool_input.file_path=<yes|no>
+     SubagentStop  : agent_id=<yes|no>
+
+   Assumption 1 (SubagentStart has agent_id): <PASS|FAIL>
+   Assumption 2 (PreToolUse has agent_id):    <PASS|FAIL>
+   → PreToolUse guard currently runs the <per-subagent | degraded global-whitelist> path.
+   ```
+5. Clean up: `rm -rf "<project_root>/docs/.docgen-scratch"` and remove `docs/flows/_selftest.md`. Exit.
+
+This is isolated from normal runs: it only writes the selftest marker, and the hook dump bypass is inert unless `selftest/` exists.
+
+---
+
 ## Workflow (execute step by step; do not skip)
 
 ### Step A: Parse `$ARGUMENTS`
@@ -71,6 +101,7 @@ Rules:
 - `--max-review-rounds=N`: hard cap on rewrite rounds per flow (**default: unlimited**, guarded by the oscillation check in Step G.3).
 - `--no-mermaid` boolean: tell `docgen-flow` to omit the Mermaid diagram (default: **on**).
 - `--force` boolean: ignore all incremental logic; regenerate everything.
+- `--selftest` boolean: diagnostic mode—verify what fields the hooks actually receive on this Claude Code build, then exit. Does NOT run normal documentation generation. See "Self-test mode" below.
 
 If `path` is empty, fail loudly:
 ```
