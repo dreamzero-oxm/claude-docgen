@@ -116,7 +116,7 @@ need_section "触达文件清单"       '触达文件|Touched|タッチ'
 # 校验 3：调用链须带来源标注三选一。
 # 启发式存在性兜底——若全文一个标注都没有，几乎必是漏写。
 if ! grep -Eq "直接调用|inferred|推断|未能跟进|direct call|couldn't follow" "$FLOW_DOC"; then
-  issues="${issues}\n- 调用链缺来源标注：每一跳必须带「直接调用 / 推断:接口→实现 / ⚠️未能跟进:<形式>」三选一。"
+  issues="${issues}\n- 调用链缺来源标注：每一跳必须带「直接调用 / provider:接口→实现 / 推断:grep / ⚠️未能跟进:<形式>」四选一。"
 fi
 
 # 校验 5：内联代码块 ≤20 行，否则须带「… (+N 行)」截断标记。

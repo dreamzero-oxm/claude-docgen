@@ -16,6 +16,7 @@ The risk you exist to catch: an LLM walking a call chain may **fabricate edges**
 ```
 project_root: /abs/path/to/repo
 flow_doc_path_abs: <absolute path to the flow doc to verify>
+callgraph: true | false         # whether the call-graph provider was enabled; missing → assume true
 touched_files:                  # the files the flow claims to have walked
   - <rel path 1>
   - <rel path 2>
@@ -35,7 +36,7 @@ Re-read the source yourself (do **not** trust the flow doc's conclusions). Verif
    - a hop tagged `inferred: iface→impl` is genuinely only an inference (not a certainty being downplayed, and not a guess being dressed up);
    - a hop tagged `⚠️ couldn't follow` is a real dynamic-dispatch boundary (the author isn't just being lazy).
 4. **Mermaid edges match too** — every edge in the §3 Mermaid diagram must correspond to a real call, identical to the text tree and the source. A fabricated diagram edge is a FAIL just like a fabricated text-tree hop.
-5. **Provenance matches the provider** — a hop tagged `[直接调用]` or `[provider:接口→实现]` must correspond to a real edge the provider reports (when the provider is available). A `[推断:grep]` tag is acceptable only when the provider was genuinely unavailable for that hop.
+5. **Provenance matches the provider** — a hop tagged `[直接调用]` or `[provider:接口→实现]` must correspond to a real edge the provider reports (when the provider is available). A `[推断:grep]` tag is acceptable when **`callgraph` is disabled (`callgraph:false`) OR the provider was genuinely unavailable for that hop**; it is NOT acceptable as a substitute for a provider-confirmed edge when the provider was available and working.
 
 **What you do NOT check** (these are quality dimensions, deliberately out of scope this round to avoid oscillating rewrites): readability, structural completeness, whether some node was *omitted*. You only judge whether what *is* written is *true*. A doc that is terse but accurate PASSES.
 
@@ -47,7 +48,12 @@ Re-read the source yourself (do **not** trust the flow doc's conclusions). Verif
 
 ## Preferred judge: the call-graph provider
 
-When available (Go file + `gopls` present), use gopls as the **objective judge** instead of re-reading by eye:
+**When `callgraph:false` (or the input field is missing and defaults to true but gopls is absent):**
+- Do NOT probe gopls or attempt any call-graph queries.
+- Accept `[推断:grep]` tags as valid provenance for all hops — the generator was operating in grep-only mode.
+- Fall back entirely to the grep + by-eye verification described below.
+
+**When `callgraph:true` and gopls is present** (Go file), use gopls as the **objective judge** instead of re-reading by eye:
 
 - Doc claims A→B → ask the provider for A's outgoing set. B present → PASS evidence. B absent → FAIL evidence (cite the provider-reported A implementation `file:line`).
 - A hop tagged `[provider:接口→实现]` is trustworthy if gopls reports that edge; if gopls does NOT report it and the doc presents it as resolved, FAIL.

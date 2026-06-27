@@ -1,6 +1,6 @@
 ---
 description: Flow-centric code documentation generator—discovers entry points, walks each call chain depth-first into an end-to-end flow doc, adversarially reviews it, writes per-directory CLAUDE.md context guides and a progressive-disclosure glossary; incremental + resume. Default zh-CN; --lang targets en-US / ja-JP / etc.
-argument-hint: <path> [--entry=GLOB|SYMBOL] [--max-depth=N] [--include=GLOB] [--exclude=GLOB] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--force]
+argument-hint: <path> [--entry=GLOB|SYMBOL] [--max-depth=N] [--include=GLOB] [--exclude=GLOB] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--profile=NAME] [--selftest] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--force]
 allowed-tools: Read, Grep, Bash, Write, Edit
 model: claude-sonnet-4-6
 ---
@@ -108,7 +108,7 @@ Rules:
 
 If `path` is empty, fail loudly:
 ```
-❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--force]
+❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--profile=NAME] [--selftest] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--force]
 ```
 
 ### Step A.1: Resolve output language (`lang`)
@@ -332,6 +332,7 @@ You are docgen-flow-review. Independently re-read the source and verify the flow
 
 project_root: <absolute>
 flow_doc_path_abs: <project_root>/docs/flows/<slug>.md
+callgraph: <true|false>        # false iff --no-callgraph was passed; missing → assume true
 touched_files:
   - <rel path 1>
   - <rel path 2>

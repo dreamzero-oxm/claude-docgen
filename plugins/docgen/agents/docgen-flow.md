@@ -261,7 +261,7 @@ flowchart TD
 ```
 1. Login                      [直接调用]            handler/auth.go:30
 2. └─ AuthSvc.Login           [直接调用]            service/auth.go:55
-3.    ├─ UserRepo.FindByName   [推断:接口→实现]      repo/user.go:80
+3.    ├─ UserRepo.FindByName   [provider:接口→实现]  repo/user.go:80
 4.    ├─ jwt.Sign              [直接调用]            pkg/jwt.go:12
 5.    └─ LogSvc.Write          [⚠️未能跟进:trpc分发]  service/auth.go:71
 ```
