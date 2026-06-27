@@ -110,6 +110,8 @@ case "$TOOL_NAME" in
         case "$rel" in */CLAUDE.md|CLAUDE.md) exit 0 ;; *) deny "docgen-dir 只能写各目录 CLAUDE.md，拒绝写入：$rel" ;; esac ;;
       docgen-flow-review)
         deny "docgen-flow-review 只裁决、禁止任何写操作，拒绝写入：$rel" ;;
+      docgen-refs)
+        case "$rel" in docs/.docgen-scratch/*) exit 0 ;; *) deny "docgen-refs 只能写 scratch（docs/.docgen-scratch/），拒绝写入：$rel" ;; esac ;;
       *)
         # 归因不到具体子代理（可能是主线程编排器，或拿不到 agent_id）→ run 内全局白名单
         if path_allowed "$rel"; then exit 0; else deny "docgen run 内写路径越界（白名单外）：$rel"; fi ;;

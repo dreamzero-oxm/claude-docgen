@@ -44,6 +44,9 @@ case "$SUBAGENT_TYPE" in
   docgen-flow-review)
     CTX='docgen-flow-review 铁律（hook 注入）：1) 你只裁决、不写任何文档（无 Write，亦不得用 Bash 重定向写文件）；2) 独立重新读源码核对，不信任流程文档结论；3) 偏向拒绝：查不到证据支持的跳判 FAIL；4) 每条 FAIL issue 必须附源码证据 file:line，否则无效；5) 只查事实（每跳是否真实存在 / 内联片段是否一致 / 来源标注是否诚实 / Mermaid 边是否真实），不查可读性与完整性。'
     ;;
+  docgen-refs)
+    CTX='docgen-refs 铁律（hook 注入）：1) 只产出蒸馏后的知识，不照抄原文——primer 受 refs_budget 上限约束，宁可少而准；2) 只写 scratch 下的 primer.md 与 glossary-seed.json，绝不写 docs/flows、不写 CLAUDE.md、不改源码；3) URL 类来源只跟左侧目录里同 path 前缀的子页，跨前缀/跨域/外站一律不跟，页数受 refs_max_pages 约束；4) 异常分支（路径缺失/抓取失败/重定向/TOC解析失败/命中上限）必记 info 日志，不静默吞掉；5) 术语种子 source 恒为 refs，definition 用业务一句话、跟随 lang。'
+    ;;
   *)
     # 非 docgen 子代理：理论上 matcher 不会让它进来；保险起见直接放行不注入。
     exit 0
