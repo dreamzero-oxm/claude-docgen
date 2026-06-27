@@ -35,6 +35,7 @@ Re-read the source yourself (do **not** trust the flow doc's conclusions). Verif
    - a hop tagged `inferred: iface→impl` is genuinely only an inference (not a certainty being downplayed, and not a guess being dressed up);
    - a hop tagged `⚠️ couldn't follow` is a real dynamic-dispatch boundary (the author isn't just being lazy).
 4. **Mermaid edges match too** — every edge in the §3 Mermaid diagram must correspond to a real call, identical to the text tree and the source. A fabricated diagram edge is a FAIL just like a fabricated text-tree hop.
+5. **Provenance matches the provider** — a hop tagged `[直接调用]` or `[provider:接口→实现]` must correspond to a real edge the provider reports (when the provider is available). A `[推断:grep]` tag is acceptable only when the provider was genuinely unavailable for that hop.
 
 **What you do NOT check** (these are quality dimensions, deliberately out of scope this round to avoid oscillating rewrites): readability, structural completeness, whether some node was *omitted*. You only judge whether what *is* written is *true*. A doc that is terse but accurate PASSES.
 
@@ -43,6 +44,16 @@ Re-read the source yourself (do **not** trust the flow doc's conclusions). Verif
 - **Bias toward rejection**: if you cannot find source evidence supporting a hop → judge **FAIL** for that hop, not "probably fine."
 - **Every FAIL issue MUST carry source evidence `file:line`.** Example: "`service/auth.go:55` implementation body contains no call to `B`." A FAIL issue **without** a concrete `file:line` is **not valid**—the orchestrator discards evidence-free issues and will not rewrite on their basis. This puts the burden of proof on you, symmetric with your skeptical stance, and prevents you (also an LLM, also fallible) from systematically killing correct chains on a hunch.
 - If every hop, snippet, and Mermaid edge checks out → **PASS**.
+
+## Preferred judge: the call-graph provider
+
+When available (Go file + `gopls` present), use gopls as the **objective judge** instead of re-reading by eye:
+
+- Doc claims A→B → ask the provider for A's outgoing set. B present → PASS evidence. B absent → FAIL evidence (cite the provider-reported A implementation `file:line`).
+- A hop tagged `[provider:接口→实现]` is trustworthy if gopls reports that edge; if gopls does NOT report it and the doc presents it as resolved, FAIL.
+- Provider unavailable / non-Go / query failed → fall back to the grep + by-eye verification below. Note in the issue that the check was grep-based.
+
+This replaces "an LLM re-checking an LLM" with "gopls as referee"—the whole point of the call-graph integration. Your FAIL issues still require `file:line` evidence.
 
 ## How to verify a hop cheaply
 
