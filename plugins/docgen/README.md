@@ -22,6 +22,11 @@
 /docgen <path> --no-mermaid                   # text-tree call chains only
 /docgen <path> --lang=en-US                   # output in English
 /docgen <path> --force                        # full regeneration
+/docgen . --no-callgraph                      # grep-only, no gopls
+/docgen . --no-shared                         # don't pre-extract shared nodes
+/docgen . --shared-threshold=5                # hotspot fan-in threshold
+/docgen . --profile=generic                   # pick an entry-discovery profile
+/docgen --selftest                            # verify hook input fields, then exit
 ```
 
 Outputs land under `<project_root>/docs/`: flow docs in `docs/flows/`, glossary in `docs/glossary/`, top index `docs/README.md`, incremental state in `docs/.docgen-state.json`. A `CLAUDE.md` context guide is written next to each documented source directory (only inside a `<!-- BEGIN/END docgen:auto -->` block—hand-written content is preserved).

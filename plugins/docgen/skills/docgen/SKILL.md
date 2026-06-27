@@ -43,6 +43,11 @@ Common invocations:
 /docgen <path> --no-mermaid                       # text-tree call chains only
 /docgen <path> --lang=en-US                       # output in English
 /docgen <path> --force                            # ignore incremental, regenerate everything
+/docgen . --no-callgraph                          # grep-only, no gopls
+/docgen . --no-shared                             # don't pre-extract shared nodes
+/docgen . --shared-threshold=5                    # hotspot fan-in threshold
+/docgen . --profile=generic                       # pick an entry-discovery profile
+/docgen --selftest                                # verify hook input fields, then exit
 ```
 
 ### Picking `--lang`
@@ -71,7 +76,7 @@ Common invocations:
 
 ## Output
 
-`/docgen` writes everything under `<project_root>/docs/` (flow docs in `docs/flows/`, glossary in `docs/glossary/`, top index `docs/README.md`, state in `.docgen-state.json`) plus a `CLAUDE.md` next to each documented source directory. Unconverged or orphaned flows are kept with a ⚠️ banner, not deleted. The final report (passed / unconverged / orphaned / uncovered counts) is delivered in English.
+`/docgen` writes everything under `<project_root>/docs/` (flow docs in `docs/flows/`, 公共节点 `docs/flows/_shared/`, glossary in `docs/glossary/`, top index `docs/README.md`, state in `.docgen-state.json`) plus a `CLAUDE.md` next to each documented source directory. Unconverged or orphaned flows are kept with a ⚠️ banner, not deleted. The final report (passed / unconverged / orphaned / uncovered counts) is delivered in English.
 
 ## Notes
 

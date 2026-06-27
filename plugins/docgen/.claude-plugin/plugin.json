@@ -1,6 +1,6 @@
 {
   "name": "docgen",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Flow-centric multi-agent code documentation generator: DFS call-chain flow docs with adversarial review, per-directory CLAUDE.md context guides, progressive-disclosure glossary; incremental + resume; configurable output language (default zh-CN)",
   "author": {
     "name": "dreamzero-oxm",
@@ -23,6 +23,8 @@
     "i18n",
     "chinese",
     "english",
-    "japanese"
+    "japanese",
+    "gopls",
+    "shared-node"
   ]
 }

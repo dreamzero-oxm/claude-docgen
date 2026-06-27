@@ -86,6 +86,11 @@ If you installed from a local path, `git pull` (or copy files) in that directory
 /docgen . --force                                    # ignore incremental, regenerate everything
 /docgen src --lang=en-US                             # output in English
 /docgen src --lang=英文                               # alias works → en-US
+/docgen . --no-callgraph                             # grep-only, no gopls
+/docgen . --no-shared                                # don't pre-extract shared nodes
+/docgen . --shared-threshold=5               # hotspot fan-in threshold
+/docgen . --profile=generic                  # pick an entry-discovery profile
+/docgen --selftest                           # verify hook input fields, then exit
 ```
 
 ### Entry points
@@ -226,6 +231,12 @@ A: Delete `<root>/docs/.docgen-state.json` (or pass `--force`). v1/v2 per-file s
 
 **Q: Can `/docgen`'s status reports be in another language?**
 A: No. Only the *generated documentation* follows `--lang`; the orchestration layer is fixed in English.
+
+**Q: docgen 怎么减少公共节点（鉴权中间件等）的重复文档/成本？**
+A: 默认开启「共享节点」：用 gopls 调用图算 fan-in，把被多条流程复用的热点先单独成文（`docs/flows/_shared/`），业务流程走到它就打链接、不重复展开。`--no-shared` 关闭，`--shared-threshold=N` 调阈值。
+
+**Q: 没装 gopls / 不是 Go 仓库怎么办？**
+A: 调用图 provider 探测不到 gopls 会自动降级到 grep 启发式（如实标 `[推断:grep]`），或显式 `--no-callgraph`。`--selftest` 可验证当前环境 hook 行为。
 
 ## Repository layout
 
