@@ -110,7 +110,7 @@ Write `flow_doc_path` following the **standard structure below**. The single des
 #### 5.1 Per-hop fixed format (used in both §3 the text tree and §4 the per-hop analysis)
 
 ```
-N. <symbol>  [direct call | inferred: iface→impl | ⚠️ couldn't follow: trpc dispatch]   file:line
+N. <符号>  [直接调用 | provider:接口→实现 | 推断:grep | ⚠️未能跟进:<形式>]   file:line
    <inlined core code, ≤ 20 lines; if longer, truncate and mark "… (+N lines)">
    <one line: what it does / why it's done this way / a gotcha>
 ```
@@ -135,7 +135,7 @@ Inline code is capped at **20 lines per hop**; beyond that, truncate and append 
 | 5 | **Data flow** | request body → domain object → persistence model: the field mapping/transforms (how the data changes) | always |
 | 6 | **External deps & side effects** | DB tables / RPC / cache / MQ / config—which external systems it touches, what it writes | always |
 | 7 | **Errors & branch paths** | how failure flows, important early-returns/branches (echoes the project rule "interrupt branches must log") | always |
-| 8 | **Break notes** | where static analysis couldn't follow (dynamic dispatch / trpc) + grep'd candidate implementations | only if there is a break |
+| 8 | **Break notes** | where static analysis couldn't trace (dynamic dispatch / trpc) + grep'd candidate implementations | only if there is a break |
 | 9 | **Change risk** | the most fragile link in this chain; who is affected if you change it | always |
 | 10 | **Touched-file list** | relative-path list, each with a clickable `file:line` anchor | always |
 
@@ -206,7 +206,7 @@ entry: <entry.signature>
 
 If the prompt carries `review_issues`, this is a rewrite after a failed review round:
 1. **Go back to the source** for each cited hop—re-`Read` the implementation at the `file:line` the reviewer gave.
-2. Fix exactly those hops: a fabricated edge → remove it or downgrade to `⚠️ couldn't follow` / `inferred`; a mis-transcribed code snippet → correct it against source.
+2. Fix exactly those hops: a fabricated edge → remove it or downgrade to `⚠️未能跟进` / `推断:grep`; a mis-transcribed code snippet → correct it against source.
 3. **Do not** add new fabricated edges to compensate, and do not "defend" a hop the reviewer refuted unless you can re-cite the `file:line` proving the call exists in the caller's body.
 4. Re-emit the full `DONE` payload (the orchestrator re-runs review on the rewrite).
 
@@ -215,7 +215,7 @@ If the prompt carries `review_issues`, this is a rewrite after a failed review r
 1. **Only write under `<project_root>/docs/flows/`** (the flow-doc path the caller gave). Never modify source code, `.claude/`, or any other repo content.
 2. **Never `git commit` / `git add`.**
 3. **Never call the Task tool to spawn other agents**—you are a leaf.
-4. **Never fabricate call edges**: if you cannot confirm a call statically, mark it `⚠️ couldn't follow` or `inferred` with grep'd candidates—honest beats fabricated. *A wrong edge poisons the whole graph.*
+4. **Never fabricate call edges**: if you cannot confirm a call statically, mark it `⚠️未能跟进` or `推断:grep` with grep'd candidates—honest beats fabricated. *A wrong edge poisons the whole graph.*
 5. **Provenance tag is mandatory on every hop** (`[直接调用]` / `[provider:接口→实现]` / `[推断:grep]` / `⚠️未能跟进:<form>`).
 6. **Inline code ≤ 20 lines per hop**; truncate longer with `… (+N lines)`.
 7. **Output language MUST follow the prompt's `lang` field** (default `zh-CN`). Headings, tables, placeholders, the metadata line all follow `lang`. Do not mix languages.
@@ -295,6 +295,6 @@ flowchart TD
 ## Tips & pitfalls
 
 - Keep each hop's inline code tight—pick the 5–20 lines that carry the call, not the whole function.
-- A `⚠️ couldn't follow` break with grep'd candidates is a **good** result, not a failure—it tells the reader exactly where to look. Faking the edge is the failure.
+- A `⚠️未能跟进` break with grep'd candidates is a **good** result, not a failure—it tells the reader exactly where to look. Faking the edge is the failure.
 - The metadata-header `review` field is always `⏳ pending` in your output; never write `✅ passed` yourself.
 - Don't add a footer / sign-off / link list at the very end beyond §10.
