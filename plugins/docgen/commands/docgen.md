@@ -156,12 +156,16 @@ rm -rf "<project_root>/docs/.docgen-scratch"
 
 # 2. Create this run's dir. No timestamp source is needed—the scratch root was just
 #    emptied, so a single fixed subdir name is unique within it:
-mkdir -p "<project_root>/docs/.docgen-scratch/run/agents" "<project_root>/docs/.docgen-scratch/run/gate"
+mkdir -p "<project_root>/docs/.docgen-scratch/run/agents" \
+         "<project_root>/docs/.docgen-scratch/run/gate" \
+         "<project_root>/docs/.docgen-scratch/run/done" \
+         "<project_root>/docs/.docgen-scratch/run/review"
 ```
 
 - The hooks detect "in a docgen run" by the **existence of a subdirectory** under `docs/.docgen-scratch/`. Creating it here is what arms the PreToolUse guard; wiping it at the end (Step L) is what disarms it.
 - Ensure `docs/.docgen-scratch/` is git-ignored (it holds volatile state). If a `.gitignore` exists at the project root and doesn't already ignore it, you may append a line; otherwise note it in the final report.
 - **Retry counts are not durable resume state**: a resumed run starts fresh scratch, so SubagentStop retry counters reset to 0—consistent with "a flow is an atomic unit, no mid-flight checkpoint" (§13.1).
+- **写运行中标志（§三 R4）**：拿到本次 `base_sha = git -C <root> rev-parse HEAD`（取不到则 `null`），把 `run_active = { started_at: <ISO>, base_sha }` 写进 `docs/.docgen-state.json`（若 state 尚不存在则连同 FIRST_RUN 初始结构一起写）。这一步在任何流程 spawn **之前**完成，确保中途中断也有标志。
 
 ### Step D: Read / initialize state (v3)
 
@@ -176,6 +180,7 @@ test -f <project_root>/docs/.docgen-state.json && echo EXISTS || echo FIRST_RUN
   "version": 3,
   "last_run": "<ISO>",
   "last_run_sha": "<git rev-parse HEAD at last run>",
+  "run_active": { "started_at": "<ISO>", "base_sha": "<本次 run 启动时 HEAD>" },
   "config": { "project_root": "...", "include": ["*.go"], "exclude": [],
               "lang": "zh-CN", "max_depth": 6 },
   "entries": [
@@ -207,8 +212,12 @@ test -f <project_root>/docs/.docgen-state.json && echo EXISTS || echo FIRST_RUN
 ```
 
 - **Terminal statuses** (skippable on resume): `review_passed`, `review_unconverged`, `orphaned`. Everything else (`pending` / `in_progress` / `flow_done`) re-runs whole.
-- **FIRST_RUN**: init in memory `{ "version":3, "flows":{}, "directories":{}, "entries":[], "file_to_flows":{}, "dir_to_flows":{}, "coverage":{}, "glossary":{}, "config":{...}, "last_run":null, "last_run_sha":null }`.
+- **`run_active`**（v3.1 新增，§三）：非 `null` 表示有一次 run 正在进行 / 上次未正常收尾。`started_at` + `base_sha`（启动时 HEAD）。收尾（Step L）置 `null`。下次启动若残留 → 进续跑模式，增量基准用 `run_active.base_sha`（治「last_run_sha 收尾才写、中断后基准偏」）。读到缺该字段的旧 v3 state → 当作 `null`，不要求 --force。
+- **FIRST_RUN**: init in memory `{ "version":3, "flows":{}, "directories":{}, "entries":[], "file_to_flows":{}, "dir_to_flows":{}, "coverage":{}, "glossary":{}, "config":{...}, "last_run":null, "last_run_sha":null, "run_active":null }`.
 - **EXISTS**: Read & parse. **If `version < 3`** (old v1/v2 per-file state): the architecture changed from per-file to flow-centric—the old `files` map is not convertible. Tell the user: `⚠️ State is v<N> (per-file). The flow-centric architecture needs a rebuild; re-run with --force to regenerate.` Then either proceed as `--force` (if they passed it) or stop. Do **not** try to migrate `files` into `flows`.
+- **续跑检测（§三）**：解析后检查 `run_active`：
+  - `run_active != null` → **上次 run 未正常收尾**，进入**续跑模式**：本次增量基准 SHA 用 `run_active.base_sha`（而非 `last_run_sha`）；并执行「scratch 对账」（见 Step L.0，但对账逻辑在续跑时于 Step F 之前先跑一次，把 done 标记里的流程在内存状态里标终态，避免重复生成）。记 info：`info: detected unfinished run (run_active since <started_at>), resuming from base_sha <...>`。
+  - `run_active == null`（或缺字段）→ 正常增量/全量路径。
 - Parse failure → `❌ state.json unparseable; pass --force or delete <path> and rerun.`
 
 ### Step E: Scan candidate files (the coverage universe)
@@ -456,6 +465,8 @@ If the entry reappears in a later run, clear the orphan mark and regenerate.
 
 ### Step L: Top-level index, cleanup, final report
 
+**L.0 Reconcile from scratch (§三, treat R1/R2)**: before finalizing state, read every `docs/.docgen-scratch/run/done/<slug>.done`. For each, parse `flow_doc=` and `touched=`. If `state.flows[slug]` is **not** already terminal (`review_passed`/`review_unconverged`/`orphaned`), trust the marker as ground truth that the flow doc was generated: set `status` to at least `flow_done`, fill `touched_files` from the marker (sha256 them now), so a mid-run interruption before the main thread wrote state does not lose completed work. Log info `info: reconciled <N> flows from scratch done markers`. (Scratch is wiped at start, so this only rescues within the same run — cross-run truth remains the state file.)
+
 **L.1 Write `docs/README.md`** (you write it; do not spawn an agent). Sections (titles switch by `lang`; paths kept verbatim):
 - **Flow list** — two sub-sections: **Business flows** (`docs/flows/*.md`) and **Shared nodes** (`docs/flows/_shared/*.md`), each with review status.
 - **Directory tree** — link each directory's `CLAUDE.md`.
@@ -463,6 +474,7 @@ If the entry reappears in a later run, clear the orphan mark and regenerate.
 - **Uncovered files** — list `coverage.uncovered` explicitly (honesty over false completeness).
 
 **L.2 Finalize state**: set `last_run`, `last_run_sha = git rev-parse HEAD`, `config` (incl. `lang`, `max_depth`), `coverage` counts. Write `docs/.docgen-state.json`.
+- **清运行中标志**：`run_active = null`（本次 run 正常收尾）。这必须在写 state 的同一次 `Write` 内完成，且在 L.3 清理 scratch 之前。
 
 **L.3 Clean up scratch**: `rm -rf "<project_root>/docs/.docgen-scratch"` (disarms the hooks). Safe to remove unconditionally—it's volatile.
 
