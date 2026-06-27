@@ -28,4 +28,5 @@ __pycache__/
 docs/.docgen-state.json
 docs/.docgen-scratch/
 
-# docs
+# 开发中间产物（设计稿 / 实现计划 / 草稿）放这里，不进仓库
+.work/
