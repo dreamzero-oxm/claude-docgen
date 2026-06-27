@@ -20,6 +20,7 @@ project_root: /abs/path/to/repo
 lang: <ISO code, e.g. zh-CN / en-US / ja-JP / ko-KR / fr-FR / de-DE / etc.>
 max_depth: <integer, DFS depth cap, e.g. 6>
 mermaid: true | false                  # whether to emit the Mermaid diagram in §3 (default true)
+callgraph: true | false        # whether to use the gopls call-graph provider (default true; false = grep only)
 entry:
   kind: http_route | rpc_method | main | exported_iface | cron | consumer
   signature: <e.g. "POST /api/v1/login" or "func (s *AuthSvc) Login(ctx, *LoginReq) (*LoginResp, error)">
@@ -37,6 +38,7 @@ review_issues:                         # OPTIONAL — present only on a review-d
 - **`lang` fallback**: in the rare case the prompt has no `lang`, **default to `zh-CN`** (preserves backward compatibility).
 - **`max_depth` fallback**: if missing, default to `6`.
 - **`mermaid` fallback**: if missing, default to `true`.
+- **`callgraph` fallback**: if missing, default to `true`. When `false`, skip the provider entirely and use grep heuristics for every hop.
 - **`review_issues` present** = this is a rewrite. Read §6.1 first: you must go back to the source and fix exactly those hops; do NOT invent new edges to "round out" the doc.
 
 ## Workflow (DFS call-chain analysis)
@@ -54,6 +56,21 @@ If `Read` fails (permission, missing file) → stop and emit `FAILED` (see §6).
 
 ### 2. Walk the call chain depth-first (the core)
 
+#### 2.0 Call-graph provider (preferred next-hop source)
+
+Before guessing the next hop, ask the **call-graph provider**:
+
+```
+CallGraphProvider.outgoing(file, line, symbol) → [{ symbol, file, line, kind }]
+  kind ∈ { direct, iface_impl }
+```
+
+First-party provider is `gopls-cli` (used when the caller's `callgraph: true` and the file is Go):
+
+- **Probe**: `command -v gopls`. Missing → provider unavailable → fall back to the grep heuristic (log one info line; never error).
+- **Query**: ask gopls' call hierarchy (outgoing) for the current symbol's position to get real callee edges. Exact gopls invocation is resolved at runtime; if the query fails or times out, degrade to grep for that hop.
+- **Why**: gopls resolves interface→implementation edges that static grep cannot—closing the "static grep breaks at DI/interfaces" gap.
+
 Starting from the entry's implementation body, identify **which downstream functions/methods it calls** (same package, cross-package, third-party), and recurse into each with `Read`/`Grep`, DFS, until you hit `max_depth` or a **leaf** (no deeper business call—e.g. a pure stdlib call or a DB driver).
 
 **Cycle detection (A→B→A must not expand forever)** — this is mandatory; do not rely on `max_depth` alone to break cycles:
@@ -65,6 +82,8 @@ Starting from the entry's implementation body, identify **which downstream funct
 - Mark the break explicitly in the doc: `⚠️ chain stops here ｜ form = interface call / callback / reflection / trpc dispatch ｜ at file:line`.
 - Use `grep` to find candidate implementations and list them as **candidate downstream (inferred, unconfirmed)**.
 - Never fabricate a confirmed edge to paper over the break.
+
+Provenance is driven by the provider result: `kind=direct` → `[直接调用]`; `kind=iface_impl` → `[provider:接口→实现]`; provider not covering it → keep `⚠️未能跟进` + grep candidates; provider unavailable/non-Go → `[推断:grep]` with a "（gopls 不可用）" note. Degraded paths are logged, never silent.
 
 ### 3. Record the touched-file set
 
@@ -96,10 +115,11 @@ N. <symbol>  [direct call | inferred: iface→impl | ⚠️ couldn't follow: trp
    <one line: what it does / why it's done this way / a gotcha>
 ```
 
-The provenance tag is **mandatory on every hop** and is one of three:
-- `direct call` — statically visible in the caller's body.
-- `inferred: iface→impl` — interface→implementation, config-driven route, or similar inference.
-- `⚠️ couldn't follow: <form>` — a dynamic-dispatch boundary you could not statically cross.
+The provenance tag is **mandatory on every hop**, one of:
+- `[直接调用]` — provider `direct`, or a grep-confirmed call expression in the caller body.
+- `[provider:接口→实现]` — gopls resolved an interface/dispatch edge.
+- `[推断:grep]` — grep heuristic only (provider unavailable/non-Go); lower confidence, note why.
+- `⚠️未能跟进:<form>` — dynamic boundary nobody could cross statically; list grep candidates.
 
 Inline code is capped at **20 lines per hop**; beyond that, truncate and append a `… (+N lines)` marker. The goal is self-containment without dumping whole files.
 
@@ -196,7 +216,7 @@ If the prompt carries `review_issues`, this is a rewrite after a failed review r
 2. **Never `git commit` / `git add`.**
 3. **Never call the Task tool to spawn other agents**—you are a leaf.
 4. **Never fabricate call edges**: if you cannot confirm a call statically, mark it `⚠️ couldn't follow` or `inferred` with grep'd candidates—honest beats fabricated. *A wrong edge poisons the whole graph.*
-5. **Provenance tag is mandatory on every hop** (`direct call` / `inferred: iface→impl` / `⚠️ couldn't follow: <form>`).
+5. **Provenance tag is mandatory on every hop** (`[直接调用]` / `[provider:接口→实现]` / `[推断:grep]` / `⚠️未能跟进:<form>`).
 6. **Inline code ≤ 20 lines per hop**; truncate longer with `… (+N lines)`.
 7. **Output language MUST follow the prompt's `lang` field** (default `zh-CN`). Headings, tables, placeholders, the metadata line all follow `lang`. Do not mix languages.
 8. **DFS must respect `max_depth`** and the `visited` cycle guard—do not loop forever.
