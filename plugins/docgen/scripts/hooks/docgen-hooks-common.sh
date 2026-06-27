@@ -85,3 +85,19 @@ docgen_in_run() {
 docgen_emit() {
   printf '%s\n' "$1"
 }
+
+# selftest 旁路：仅当本次 run 的 scratch 下存在 selftest/ 标记目录时，
+# 把本次原始 hook 输入 dump 一份，供 --selftest 验证 hook 输入字段（计划 D8）。
+# 入参：$1 = 事件名（subagent_start | pretooluse | subagent_stop）。
+# 关键设计点：正常 run 下 selftest/ 不存在，本函数立即返回，零副作用。
+docgen_selftest_dump() {
+  local event="$1"
+  local run_dir
+  run_dir="$(docgen_active_run_dir 2>/dev/null)" || return 0
+  [ -d "$run_dir/selftest" ] || return 0
+  local out="$run_dir/selftest/${event}.json"
+  # 多次触发同事件时追加序号，避免覆盖
+  local i=1
+  while [ -e "$out" ]; do out="$run_dir/selftest/${event}.${i}.json"; i=$((i+1)); done
+  printf '%s' "$DOCGEN_HOOK_INPUT" > "$out" 2>/dev/null || true
+}

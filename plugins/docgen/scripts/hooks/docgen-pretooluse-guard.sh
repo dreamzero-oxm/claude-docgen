@@ -20,6 +20,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/docgen-hooks-common.sh"
 
 docgen_read_input
+docgen_selftest_dump "pretooluse"
 
 # —— 前置开关：不在 run 中就立即放行（最重要的一步）——
 RUN_DIR="$(docgen_active_run_dir || true)"

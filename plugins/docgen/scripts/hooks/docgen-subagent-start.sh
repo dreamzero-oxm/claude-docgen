@@ -19,6 +19,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/docgen-hooks-common.sh"
 
 docgen_read_input
+docgen_selftest_dump "subagent_start"
 
 SUBAGENT_TYPE="$(docgen_json '.subagent_type' 'subagent_type')"
 AGENT_ID="$(docgen_json '.agent_id' 'agent_id')"
