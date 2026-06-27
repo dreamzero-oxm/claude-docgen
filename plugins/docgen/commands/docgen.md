@@ -270,7 +270,16 @@ git -C <root> ls-files --others --exclude-standard 2>/dev/null   # untracked
 ```
 Merge & dedupe. If `last_run_sha` is missing/invalid (e.g. rebased) → degrade to full (all flows).
 
-**F.2 Dirty-flow propagation** via `file_to_flows`: for each `f ∈ changed_files`, every slug in `file_to_flows[f]` is **stale → regenerate whole** (review state voided). Second-confirm with the comment-stripped sha256 (git says changed but content-equivalent → skip). **Deleted-file edge**: before hashing, check existence—if a flow's `touched_files` entry no longer exists on disk, **treat as changed and regenerate that flow**; do not sha256 a missing path. Log info `file X deleted, regenerating flow Y`.
+**F.2 Dirty-flow propagation — two-level (§五.1, treat I1/I2)**
+
+*Level 1 — coarse filter (always)*: via `file_to_flows`, the set of flows touching any `f ∈ changed_files` are **candidates**. Flows touching no changed file are skipped outright (cheap, no provider call) — unchanged from before.
+
+*Level 2 — fine judgment (only candidates)*: for each candidate flow, decide whether it is truly dirty:
+- **Provider available AND `flows[slug].dirty_granularity != "file"`** (i.e. this flow was generated with a working callgraph, so its `walked_symbols` is trustworthy): for each changed file the flow touches, ask the provider which **symbols** changed in that file (enclosing-symbol of each changed hunk). Intersect with `flows[slug].walked_symbols`. **Non-empty intersection → dirty → regenerate whole** (review state voided). **Empty intersection → skip**, log `info: flow <slug> skipped — changed symbols in <file> not on its walked path`.
+- **Provider unavailable / non-Go / flow's `dirty_granularity == "file"`**: fall back to the existing **file-level sha256** check (comment-stripped sha; deleted-file edge below). Any changed touched file with a differing/absent sha → dirty. Log `info: flow <slug> file-level dirty check (provider unavailable or untrusted symbols)`.
+- Record on the flow the granularity actually used this run in `dirty_granularity` (`symbol` or `file`).
+
+*Preserved edges*: **Deleted-file edge**: before hashing, check existence—if a flow's `touched_files` entry no longer exists on disk, **treat as changed and regenerate that flow**; do not sha256 a missing path. Log info `file X deleted, regenerating flow Y`. The comment-stripped sha256 second-confirm (git says changed but content-equivalent → skip) also stays — both apply inside the file-level branch and as the existence pre-check before any sha.
 
 **F.3 Entry add/remove** (always re-discover unless `--entry` given): compare discovered entries to `state.entries`. **New entry → new flow.** **Vanished entry → orphan handling (Step K.3)**, do not regenerate.
 
@@ -502,6 +511,8 @@ assert every .md you Write-d directly ⊆ { docs/README.md, docs/glossary/** }
        and every CLAUDE.md you Edit-ed touched only inside docgen:auto markers
 ```
 > ⚠️ If `Task(docgen-flow) == 0` while the work set > 0—you never actually spawned. **Report failure**; don't write flow docs yourself.
+
+- **Observability (§七.4)**: when symbol-level fine judgment skipped candidates, log a summary line `symbol-level skipped: <N> flows (changed files touched but not on walked path)` so the optimization's effect is visible.
 
 **L.5 Success report** (English):
 ```
