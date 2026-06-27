@@ -410,7 +410,12 @@ Merge all flows' `glossary_candidates`, keyed by normalized-lowercase `term`:
 - **Existing term** → add the new flow to that L1's "appears in flows" (inside its auto block); do not overwrite a human-polished definition outside the block.
 - **Rebuild L0** from every L1's head: `- [term](./terms/<slug>.md) — <one-line> （别名：…）`. Keep L0 < 200 lines (paginate by category if it grows past that). Use **plain markdown links, never `@import`** (imports load eagerly and defeat progressive disclosure).
 - Update `state.glossary = { terms_count, l0_path:"docs/glossary/GLOSSARY.md", generated_at }`.
-- **Orphan-term residue (§13.7 TODO-F)**: if a term's only "appears in flows" were orphaned flows, **leave it and mark stale—do not delete** (consistent with orphan-flow handling).
+- **Dead-term staling (§六.2, replaces old TODO-F)**: after rebuilding each L1 term, look at its "appears in flows" list. If **every** referencing flow is `orphaned` or no longer in `state.flows`, the term is dead:
+  - Insert at the top of that L1 file's `docgen:auto` block a localized banner: `⚠️ 本术语来源流程均已失效，可能过期`（en-US: `⚠️ All source flows of this term are gone; may be stale`）。
+  - In the L0 index line for this term, append `（⚠️过期）` / `(⚠️ stale)`。
+  - **Do NOT delete** the L1 file or the L0 line.
+  - Log one info line: `info: term <slug> staled, all N source flows orphaned/removed`。
+  - **Self-heal**: this is recomputed every run from the rebuilt "appears in flows"; when a referencing flow returns, the list is no longer all-dead and the banner is simply not re-inserted. No separate un-stale logic needed.
 
 L0 skeleton (zh-CN):
 ````markdown
@@ -443,6 +448,11 @@ The flow-doc metadata header `review` field and all banners are written **only b
 > 该流程可能已废弃或入口被重命名/重构，内容可能过期，请以源码为准。
 ```
 If the entry reappears in a later run, clear the orphan mark and regenerate.
+
+**K.4 Stale directory CLAUDE.md (§六.3)**: after directory processing, for each directory `D` in `dir_to_flows`, if **every** slug in `dir_to_flows[D]` is `orphaned` or absent from `state.flows`, `D`'s context guide is stale:
+- Do **not** delete `D/CLAUDE.md` and do **not** touch human content. `Edit` only inside its `docgen:auto` block: insert at the block top a localized banner `⚠️ 本目录原关联流程均已失效，内容可能过期`（en-US: `⚠️ All flows that referenced this directory are gone; content may be stale`）。
+- Log info: `info: dir <D> staled, all referencing flows orphaned/removed`。
+- **Self-heal** identical to dead terms: recomputed from `dir_to_flows` each run; a returning flow clears the condition automatically.
 
 ### Step L: Top-level index, cleanup, final report
 
@@ -482,6 +492,7 @@ assert every .md you Write-d directly ⊆ { docs/README.md, docs/glossary/** }
   ⊝ Skipped (unchanged): <S>
   Directories (CLAUDE.md): <M>
   Glossary terms:    <T>            (omitted if --no-glossary)
+  ⚠️ Stale derived artifacts: <D> terms, <E> dirs   (banners inserted, not deleted)
   Coverage:          <touched>/<candidates_total> files touched
   Uncovered files:   <K>  (listed in docs/README.md)
   Elapsed:           <sec> s
