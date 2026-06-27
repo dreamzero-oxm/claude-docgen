@@ -65,7 +65,7 @@ rel_of() {
 path_allowed() {
   local rel="$1"
   case "$rel" in
-    docs/flows/*.md)               return 0 ;;
+    docs/flows/*.md)               return 0 ;;   # 含 docs/flows/_shared/*.md 公共节点文档
     */CLAUDE.md|CLAUDE.md)         return 0 ;;
     docs/.docgen-state.json)       return 0 ;;
     docs/glossary/*)               return 0 ;;
@@ -105,7 +105,7 @@ case "$TOOL_NAME" in
 
     case "$SUBAGENT_TYPE" in
       docgen-flow)
-        case "$rel" in docs/flows/*.md) exit 0 ;; *) deny "docgen-flow 只能写 docs/flows/*.md，拒绝写入：$rel" ;; esac ;;
+        case "$rel" in docs/flows/*.md) exit 0 ;; *) deny "docgen-flow 只能写 docs/flows/*.md，拒绝写入：$rel" ;; esac ;;  # 含 docs/flows/_shared/*.md 公共节点文档
       docgen-dir)
         case "$rel" in */CLAUDE.md|CLAUDE.md) exit 0 ;; *) deny "docgen-dir 只能写各目录 CLAUDE.md，拒绝写入：$rel" ;; esac ;;
       docgen-flow-review)
