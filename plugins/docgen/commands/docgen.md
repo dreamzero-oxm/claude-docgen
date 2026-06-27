@@ -101,6 +101,8 @@ Rules:
 - `--max-review-rounds=N`: hard cap on rewrite rounds per flow (**default: unlimited**, guarded by the oscillation check in Step G.3).
 - `--no-mermaid` boolean: tell `docgen-flow` to omit the Mermaid diagram (default: **on**).
 - `--no-callgraph` boolean: disable the gopls call-graph provider; every hop uses grep heuristics only (use for non-Go repos or when gopls is unavailable). Default: provider **on**.
+- `--no-shared` boolean: disable pre-extraction of shared hotspot nodes; every flow walks its full chain (more tokens, simpler). Default: shared extraction **on** (requires callgraph; auto-off if `--no-callgraph`).
+- `--shared-threshold=N` fan-in threshold for treating a node as a shared hotspot. Default 3.
 - `--force` boolean: ignore all incremental logic; regenerate everything.
 - `--selftest` boolean: diagnostic mode—verify what fields the hooks actually receive on this Claude Code build, then exit. Does NOT run normal documentation generation. See "Self-test mode" below.
 
@@ -198,6 +200,7 @@ test -f <project_root>/docs/.docgen-state.json && echo EXISTS || echo FIRST_RUN
   },
   "file_to_flows": { "<rel path>": ["<slug>"] },
   "dir_to_flows":  { "<dir>": ["<slug>"] },
+  "shared_to_flows": { "<shared-slug>": ["<business-flow-slug>"] },
   "coverage": { "candidates_total": 0, "touched": 0, "uncovered": ["<rel path>"] },
   "glossary": { "terms_count": 0, "l0_path": "docs/glossary/GLOSSARY.md", "generated_at": "..." }
 }
@@ -263,6 +266,19 @@ Flows already in a terminal status and not flagged by F.2–F.4 are **skipped** 
 
 **F.5 Refresh the coverage ledger** (even in incremental—or you'll misreport): re-enumerate `candidates_all`, set `coverage.uncovered = candidates_all − ⋃ all flows' touched_files`. New files touched by no flow land in `uncovered` and are listed in the final report.
 
+### Step F.5: Discover shared hotspot nodes (skip if `--no-shared` or `--no-callgraph`)
+
+Reused nodes (auth middleware, common repos) get walked/reviewed once instead of once per flow.
+
+1. **Build fan-in via the provider**: for each entry, do a bounded-depth (≤ `max_depth`) outgoing traversal with the call-graph provider, accumulating a fan-in count per callee symbol (how many distinct entries' chains reach it). gopls is incremental, so accumulate during traversal—there is no whole-graph snapshot.
+2. **Select hotspots**: symbols with `fan-in ≥ --shared-threshold` (default 3), EXCLUDING ① the entries themselves (too shallow) and ② pure leaves with no substantial subchain (nothing to factor out).
+3. **Spawn a shared `docgen-flow` per hotspot** with `mode: shared`, output `docs/flows/_shared/<slug>.md` (slug = `_shared/` + normalized `pkg.Symbol`). Each goes through the same review sub-loop (Step G.3). Record as a flow in state with the status machine identical to business flows.
+4. **Feed hotspots to business flows**: pass each Step G `docgen-flow` a `shared_nodes: [{symbol, doc_path}]` list; it stops descending at those nodes and links instead.
+
+**State (v3) addition**: `shared_to_flows: { "<shared-slug>": ["<business-flow-slug>", ...] }`—which business flows reference each hotspot. Rebuild each run from business flows' shared-node hits.
+
+**Incremental**: a `_shared/<slug>.md` is a flow—same dirty-propagation (its touched files change → regenerate). A business flow re-runs only when its own chain changes OR a referenced hotspot's `doc_path` changes (rare; content changes alone don't move `doc_path`, so referencing flows need not re-run).
+
 ### Step G: Run each flow as an independent generate→review→rewrite pipeline
 
 > ★ Hotspot. The blocks below are the **real `Task` parameters you must emit**, not pseudocode. The known failure is treating "I should spawn" as a thought—**actually invoke `Task`.**
@@ -283,6 +299,10 @@ lang: <normalized lang>
 max_depth: <N>
 mermaid: <true|false>          # false iff --no-mermaid
 callgraph: <true|false>        # false iff --no-callgraph
+mode: business
+shared_nodes:
+  - symbol: <pkg.Symbol>          # from Step F.5; omit this block entirely if --no-shared
+    doc_path: docs/flows/_shared/<slug>.md
 entry:
   kind: <http_route|rpc_method|main|exported_iface|cron|consumer>
   signature: <e.g. "POST /api/v1/login">
@@ -426,7 +446,7 @@ If the entry reappears in a later run, clear the orphan mark and regenerate.
 ### Step L: Top-level index, cleanup, final report
 
 **L.1 Write `docs/README.md`** (you write it; do not spawn an agent). Sections (titles switch by `lang`; paths kept verbatim):
-- **Flow list** — link every `docs/flows/*.md` with its review status (✅/⚠️/orphan).
+- **Flow list** — two sub-sections: **Business flows** (`docs/flows/*.md`) and **Shared nodes** (`docs/flows/_shared/*.md`), each with review status.
 - **Directory tree** — link each directory's `CLAUDE.md`.
 - **Glossary entry** — link `docs/glossary/GLOSSARY.md` (omit if `--no-glossary`).
 - **Uncovered files** — list `coverage.uncovered` explicitly (honesty over false completeness).
@@ -438,6 +458,7 @@ If the entry reappears in a later run, clear the orphan mark and regenerate.
 **L.4 Final self-check** (hard assertions; failure → report the run as failed, do not paper over):
 ```
 assert Task(docgen-flow) calls made           == number of flows in the work set   (≥1 if work set > 0)
+assert Task(docgen-flow, mode=shared) calls == number of hotspots discovered   (0 if --no-shared)
 assert Task(docgen-flow-review) calls made     >= number of flows reviewed          (unless --no-review)
 assert Task(docgen-dir) calls made             == number of directories processed
 assert every .md you Write-d directly ⊆ { docs/README.md, docs/glossary/** }
