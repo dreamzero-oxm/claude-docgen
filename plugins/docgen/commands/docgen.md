@@ -108,7 +108,7 @@ Rules:
 
 If `path` is empty, fail loudly:
 ```
-❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--force]
+❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--force]
 ```
 
 ### Step A.1: Resolve output language (`lang`)
@@ -266,7 +266,7 @@ Flows already in a terminal status and not flagged by F.2–F.4 are **skipped** 
 
 **F.5 Refresh the coverage ledger** (even in incremental—or you'll misreport): re-enumerate `candidates_all`, set `coverage.uncovered = candidates_all − ⋃ all flows' touched_files`. New files touched by no flow land in `uncovered` and are listed in the final report.
 
-### Step F.5: Discover shared hotspot nodes (skip if `--no-shared` or `--no-callgraph`)
+### Step F.6: Discover shared hotspot nodes (skip if `--no-shared` or `--no-callgraph`)
 
 Reused nodes (auth middleware, common repos) get walked/reviewed once instead of once per flow.
 
@@ -301,7 +301,7 @@ mermaid: <true|false>          # false iff --no-mermaid
 callgraph: <true|false>        # false iff --no-callgraph
 mode: business
 shared_nodes:
-  - symbol: <pkg.Symbol>          # from Step F.5; omit this block entirely if --no-shared
+  - symbol: <pkg.Symbol>          # from Step F.6; omit this block entirely if --no-shared
     doc_path: docs/flows/_shared/<slug>.md
 entry:
   kind: <http_route|rpc_method|main|exported_iface|cron|consumer>
