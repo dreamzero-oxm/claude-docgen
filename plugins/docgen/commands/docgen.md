@@ -100,6 +100,7 @@ Rules:
 - `--no-review` boolean: skip the adversarial review loop (default: review **on**).
 - `--max-review-rounds=N`: hard cap on rewrite rounds per flow (**default: unlimited**, guarded by the oscillation check in Step G.3).
 - `--no-mermaid` boolean: tell `docgen-flow` to omit the Mermaid diagram (default: **on**).
+- `--no-callgraph` boolean: disable the gopls call-graph provider; every hop uses grep heuristics only (use for non-Go repos or when gopls is unavailable). Default: provider **on**.
 - `--force` boolean: ignore all incremental logic; regenerate everything.
 - `--selftest` boolean: diagnostic mode—verify what fields the hooks actually receive on this Claude Code build, then exit. Does NOT run normal documentation generation. See "Self-test mode" below.
 
@@ -281,6 +282,7 @@ project_root: <absolute>
 lang: <normalized lang>
 max_depth: <N>
 mermaid: <true|false>          # false iff --no-mermaid
+callgraph: <true|false>        # false iff --no-callgraph
 entry:
   kind: <http_route|rpc_method|main|exported_iface|cron|consumer>
   signature: <e.g. "POST /api/v1/login">
@@ -505,6 +507,7 @@ wc -l <file> ; test -f <file>
 sed -E -e 's|//.*$||' -e ':a;N;$!ba;s|/\*[^*]*\*+([^/*][^*]*\*+)*/||g' <file> | tr -s '[:space:]' ' ' | sha256sum | awk '{print $1}'
 mkdir -p <dir> ; rm -rf <project_root>/docs/.docgen-scratch
 printenv DOCGEN_LANG ; printenv DOCGEN_PROJECT_ROOT
+command -v gopls               # call-graph provider probe (degrades to grep if absent)
 ```
 
 ## Failure backstops
