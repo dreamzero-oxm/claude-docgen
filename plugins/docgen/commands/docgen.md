@@ -104,6 +104,7 @@ Rules:
 - `--no-shared` boolean: disable pre-extraction of shared hotspot nodes; every flow walks its full chain (more tokens, simpler). Default: shared extraction **on** (requires callgraph; auto-off if `--no-callgraph`).
 - `--shared-threshold=N` fan-in threshold for treating a node as a shared hotspot. Default 3.
 - `--force` boolean: ignore all incremental logic; regenerate everything.
+- `--model-tier=economy|balanced|quality`: pick the model tier for subagents. Default **balanced**. See "Model tier" mapping below. `economy` = all sonnet (old behavior); `quality` = flow/review on opus.
 - `--refs=<path-or-url>` may repeat: reference material to distill before generation (local file, local dir, or `http(s)://` doc-site URL). Presence triggers Step E.2. Default: none.
 - `--refs-budget=N`: token cap on the distilled domain primer. Default 2000. (The seed terms are separate.)
 - `--refs-max-pages=N`: page cap when a `--refs` URL's left-nav TOC is crawled. Default 60.
@@ -112,8 +113,25 @@ Rules:
 
 If `path` is empty, fail loudly:
 ```
-❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--profile=NAME] [--selftest] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--refs=PATH|URL] [--refs-budget=N] [--refs-max-pages=N] [--refs-no-refetch] [--force]
+❌ Missing <path>. Usage: /docgen <path> [--entry=...] [--max-depth=N] [--include=...] [--exclude=...] [--concurrency=N] [--lang=CODE] [--no-glossary] [--no-review] [--max-review-rounds=N] [--no-mermaid] [--profile=NAME] [--selftest] [--no-callgraph] [--no-shared] [--shared-threshold=N] [--refs=PATH|URL] [--refs-budget=N] [--refs-max-pages=N] [--refs-no-refetch] [--model-tier=economy|balanced|quality] [--force]
 ```
+
+If `--model-tier` is an unknown value, fail loudly: `❌ Invalid --model-tier=<v>. Use economy | balanced | quality.` (do not silently fall back to default).
+
+### Step A.2: Resolve model tier → per-subagent model
+
+Parse `--model-tier` (default `balanced` if absent). Map to each subagent's `model` via `model_of(subagent, tier)`:
+
+| subagent | economy | balanced (default) | quality |
+|----------|---------|---------------------|---------|
+| docgen-refs | sonnet | sonnet | sonnet |
+| docgen-dir | sonnet | sonnet | sonnet |
+| docgen-flow | sonnet | sonnet (wide-fan-out entries → opus) | opus |
+| docgen-flow-review | sonnet | opus | opus |
+
+- Pass this `model` explicitly on every `Task(...)` spawn (Steps E.2 / G.1 / G.3 / I). The Task `model` arg overrides the agent file's `model:` frontmatter (which stays `claude-sonnet-4-6` as a fallback).
+- Use the tier aliases `sonnet` / `opus` (not pinned version strings), so they track the environment's latest.
+- **Wide-fan-out upgrade** applies only to `docgen-flow` and only in `balanced`: when you predict an entry fans out widely (many touched files), spawn that one with `model: "opus"`. In `economy` this upgrade is **off** (flow always sonnet); in `quality` flow is **always** opus.
 
 ### Step A.1: Resolve output language (`lang`)
 
@@ -271,6 +289,7 @@ If `--refs` was passed, spawn **one** `docgen-refs` Task before deciding the wor
 Task(
   subagent_type: "docgen-refs",
   description: "distill refs",
+  model: "<model_of('docgen-refs', tier)>",   # always sonnet
   prompt: """
 You are docgen-refs. Distill the reference material below into a domain primer + glossary seed.
 
@@ -361,6 +380,7 @@ Outside resume mode (normal run), G.0 is a no-op and every flow goes through G.1
 Task(
   subagent_type: "docgen-flow",
   description: "<e.g. 'flow: POST /api/v1/login'>",
+  model: "<model_of('docgen-flow', tier); see Step A.2 wide-fan-out rule>",
   prompt: """
 You are docgen-flow. Generate the end-to-end flow document for the entry below.
 
@@ -392,7 +412,7 @@ Return DONE / PARTIAL / FAILED per your protocol (with touched_files + sha256 + 
 """
 )
 ```
-Set `model: "opus"` for entries you expect to fan out widely (many touched files). Pass only concrete paths, never globs.
+Set the `model` per Step A.2: in `balanced`, default sonnet but use `opus` for entries you expect to fan out widely (many touched files); in `economy` always sonnet; in `quality` always opus. Pass only concrete paths, never globs.
 
 **G.2 On return → update state**:
 - `DONE`/`PARTIAL` (doc written) → `flows[slug] = { ..., status: "flow_done", touched_files: {<from return, with sha256>}, walked_symbols: <from return>, dirty_granularity: <"symbol" if callgraph provider was used for this flow else "file">, attempts: prev+1, generated_at }`, stash `glossary_candidates`. Proceed to G.3.
@@ -404,6 +424,7 @@ Set `model: "opus"` for entries you expect to fan out widely (many touched files
 Task(
   subagent_type: "docgen-flow-review",
   description: "<e.g. 'review: post_api_v1_login'>",
+  model: "<model_of('docgen-flow-review', tier)>",   # opus in balanced/quality, sonnet in economy
   prompt: """
 You are docgen-flow-review. Independently re-read the source and verify the flow doc's call chain.
 
@@ -444,6 +465,7 @@ For each directory `D` (deepest first), **actually** invoke:
 Task(
   subagent_type: "docgen-dir",
   description: "<CLAUDE.md: D>",
+  model: "<model_of('docgen-dir', tier)>",   # always sonnet
   prompt: """
 You are docgen-dir. Write/update the context-guide CLAUDE.md for the directory below.
 ONLY touch content inside the <!-- BEGIN/END docgen:auto --> markers; never overwrite human content.
@@ -579,6 +601,7 @@ assert every .md you Write-d directly ⊆ { docs/README.md, docs/glossary/** }
   Directories (CLAUDE.md): <M>
   Glossary terms:    <T>            (omitted if --no-glossary)
   Refs distilled:    <pages_fetched> pages, <seed_terms> seed terms   (omitted if no --refs)
+  Model tier:        <economy|balanced|quality>
   ⚠️ Stale derived artifacts: <D> terms, <E> dirs   (banners inserted, not deleted)
   Coverage:          <touched>/<candidates_total> files touched
   Uncovered files:   <K>  (listed in docs/README.md)

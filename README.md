@@ -206,6 +206,7 @@ Highlights:
 - **Symbol-level incremental**: when a callgraph provider (gopls) is available, a flow is regenerated only if a changed file's changed *symbols* lie on its walked call path (not merely the same file); regeneration reuses the previous doc for localized edits. Falls back to file-level sha when the provider is unavailable.
 - **Stale, not deleted**: orphaned flows, dead glossary terms, and stale directory guides get a ⚠️ banner inside the `docgen:auto` block; nothing is deleted, and banners self-heal when the source returns.
 - **Reference distillation** (`--refs=`): point docgen at existing design docs, glossaries, or a doc-site URL; a dedicated `docgen-refs` agent distills them into a compact domain primer + glossary seed terms (URLs are crawled by left-nav TOC, same-prefix pages only). Flow generation and review then use the project's real terminology instead of guessing — facts are still verified against source.
+- **Model tier** (`--model-tier=economy|balanced|quality`, default `balanced`): tune cost/quality per run. `economy` = all sonnet; `balanced` = reviewer on opus + wide-fan-out flows on opus; `quality` = flows and reviewer on opus. refs/dir stay on sonnet in every tier.
 - **Coverage ledger** is refreshed every run, including incremental—files no flow touched are listed in `docs/README.md`.
 - **Per-flow `lang`** drives language-switch regeneration without `--force`.
 - Re-running after an interruption resumes automatically; `--force` or deleting the state file forces a full rebuild.

@@ -10,7 +10,7 @@
       "name": "docgen",
       "source": "./plugins/docgen",
       "description": "Flow-centric multi-agent code documentation generator: DFS call-chain flow docs with adversarial review, per-directory CLAUDE.md context guides, progressive-disclosure glossary; incremental + resume; configurable output language (default zh-CN)",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "category": "documentation",
       "keywords": ["docgen", "documentation", "markdown", "subagent", "incremental", "call-graph", "flow", "multilingual", "i18n", "chinese", "english", "japanese", "gopls", "shared-node"]
     }
