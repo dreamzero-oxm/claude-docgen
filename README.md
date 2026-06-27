@@ -205,6 +205,7 @@ Highlights:
 - **Deterministic resume**: a `SubagentStop` hook records each flow's completion (and each reviewer's verdict/round) to scratch; an interrupted run resumes without redoing completed flows or replaying review rounds. A `run_active` flag in state marks an unfinished run and fixes the incremental base SHA.
 - **Symbol-level incremental**: when a callgraph provider (gopls) is available, a flow is regenerated only if a changed file's changed *symbols* lie on its walked call path (not merely the same file); regeneration reuses the previous doc for localized edits. Falls back to file-level sha when the provider is unavailable.
 - **Stale, not deleted**: orphaned flows, dead glossary terms, and stale directory guides get a ⚠️ banner inside the `docgen:auto` block; nothing is deleted, and banners self-heal when the source returns.
+- **Reference distillation** (`--refs=`): point docgen at existing design docs, glossaries, or a doc-site URL; a dedicated `docgen-refs` agent distills them into a compact domain primer + glossary seed terms (URLs are crawled by left-nav TOC, same-prefix pages only). Flow generation and review then use the project's real terminology instead of guessing — facts are still verified against source.
 - **Coverage ledger** is refreshed every run, including incremental—files no flow touched are listed in `docs/README.md`.
 - **Per-flow `lang`** drives language-switch regeneration without `--force`.
 - Re-running after an interruption resumes automatically; `--force` or deleting the state file forces a full rebuild.

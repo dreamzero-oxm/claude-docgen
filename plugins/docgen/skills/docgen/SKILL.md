@@ -27,12 +27,22 @@ Do **not** use for:
 
 ## How to use
 
-Forward the request straight to the slash command. **Do not** read source code yourself, **do not** write `.md` / `CLAUDE.md` files yourself. Hand it off to `/docgen`.
+**Before forwarding, ask once about reference material** (this is the only thing you ask; everything else goes straight to the command):
+
+> 「这个仓库有没有现成的设计文档/术语表/PRD 可以参考？给我路径或文档站网址的话，生成的文档能用对业务术语。」（"Any existing design docs / glossary / PRD I should read first? Local paths or a doc-site URL both work — it helps the output use the right business terms."）
+
+- User gives paths/URLs → append one `--refs=<value>` per item to the command.
+- User has none / skips → forward without `--refs`.
+- The interaction happens here at the skill layer; `/docgen` itself stays non-interactive.
+
+Then forward the request straight to the slash command. **Do not** read source code yourself, **do not** write `.md` / `CLAUDE.md` files yourself. Hand it off to `/docgen`.
 
 Common invocations:
 
 ```
 /docgen <path>                                   # auto-discover entries, default *.go, zh-CN
+/docgen <path> --refs=docs/design.md             # distill a local design doc first (right terminology)
+/docgen <path> --refs=https://cloud.tencent.com/document/product/1552  # distill a doc-site (left-nav TOC, same-prefix pages)
 /docgen <path> --entry='POST /api/v1/login'      # document only this entry's flow
 /docgen <path> --entry='AuthSvc.Login'           # entry by symbol
 /docgen <path> --max-depth=8                     # deeper DFS (default 6)
